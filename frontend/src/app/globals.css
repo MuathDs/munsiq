@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+
+  /* Design tokens from the Munsiq enterprise cloud dashboard handoff.
+     This is a single permanently-dark surface, not a light/dark toggle,
+     so these are used directly rather than gated behind a `dark:` variant. */
+  --color-bg: oklch(0.15 0.006 258);
+  --color-sidebar: oklch(0.13 0.006 258);
+  --color-surface: oklch(0.19 0.006 258);
+  --color-surface-hover: oklch(0.23 0.007 258);
+  --color-line: oklch(1 0 0 / 8%);
+  --color-line-strong: oklch(1 0 0 / 14%);
+  --color-ink: oklch(0.94 0.003 258);
+  --color-ink-soft: oklch(0.64 0.013 258);
+  --color-ink-faint: oklch(0.5 0.012 258);
+  --color-accent: oklch(0.64 0.19 276);
+  --color-accent-strong: oklch(0.72 0.17 276);
+  --color-success: oklch(0.72 0.15 155);
+  --color-warning: oklch(0.75 0.15 80);
+  --color-avatar: oklch(0.3 0.01 258);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}

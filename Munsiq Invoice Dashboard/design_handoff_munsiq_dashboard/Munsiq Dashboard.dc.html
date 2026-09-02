@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+  <style>
+    body{margin:0;background:oklch(0.15 0.006 258);}
+    *{box-sizing:border-box;font-family:'Inter',sans-serif;}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    ::-webkit-scrollbar{width:10px;height:10px;}
+    ::-webkit-scrollbar-thumb{background:oklch(1 0 0/12%);border-radius:8px;}
+    ::placeholder{color:oklch(0.5 0.012 258);}
+    a{color:oklch(0.72 0.17 276);text-decoration:none;}
+    a:hover{color:oklch(0.78 0.16 276);}
+  </style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;background:oklch(0.15 0.006 258);color:oklch(0.94 0.003 258);">
+  <aside style="width:264px;flex-shrink:0;background:oklch(0.13 0.006 258);border-right:1px solid oklch(1 0 0/8%);display:flex;flex-direction:column;padding:22px 14px;gap:24px;position:sticky;top:0;height:100vh;">
+    <div style="display:flex;align-items:center;gap:10px;padding:0 8px 18px;border-bottom:1px solid oklch(1 0 0/8%);">
+      <div style="width:34px;height:34px;border-radius:9px;background:oklch(0.64 0.19 276);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;color:oklch(0.99 0 0);flex-shrink:0;">M</div>
+      <div>
+        <div style="font-size:16px;font-weight:700;letter-spacing:-0.01em;">Munsiq</div>
+        <div style="font-size:11px;color:oklch(0.55 0.012 258);">AI Invoice Extraction</div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:2px;">
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:oklch(0.66 0.014 258);cursor:pointer;font-size:14px;font-weight:500;">
+        <i data-lucide="layout-dashboard" style="width:18px;height:18px;"></i>
+        <span>Dashboard</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;background:oklch(0.64 0.19 276/14%);color:oklch(0.96 0.003 258);cursor:pointer;font-size:14px;font-weight:600;">
+        <i data-lucide="upload-cloud" style="width:18px;height:18px;color:oklch(0.72 0.17 276);"></i>
+        <span>Batch Upload</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:oklch(0.66 0.014 258);cursor:pointer;font-size:14px;font-weight:500;">
+        <i data-lucide="history" style="width:18px;height:18px;"></i>
+        <span>History</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:oklch(0.66 0.014 258);cursor:pointer;font-size:14px;font-weight:500;">
+        <i data-lucide="file-text" style="width:18px;height:18px;"></i>
+        <span>Templates</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:oklch(0.66 0.014 258);cursor:pointer;font-size:14px;font-weight:500;">
+        <i data-lucide="settings" style="width:18px;height:18px;"></i>
+        <span>Settings</span>
+      </div>
+    </div>
+
+    <div style="margin-top:auto;display:flex;align-items:center;gap:10px;padding:12px;border-radius:10px;background:oklch(0.19 0.006 258);border:1px solid oklch(1 0 0/8%);">
+      <div style="width:32px;height:32px;border-radius:50%;background:oklch(0.3 0.01 258);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0;">JD</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Jordan Diaz</div>
+        <div style="font-size:11px;color:oklch(0.55 0.012 258);">Finance Ops</div>
+      </div>
+      <i data-lucide="chevron-right" style="width:16px;height:16px;color:oklch(0.5 0.012 258);"></i>
+    </div>
+  </aside>
+
+  <main style="flex:1;padding:32px 40px 60px;display:flex;flex-direction:column;gap:26px;min-width:0;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap;">
+      <div>
+        <h1 style="margin:0;font-size:28px;font-weight:700;letter-spacing:-0.015em;">Batch Processing</h1>
+        <p style="margin:6px 0 0;font-size:14px;color:oklch(0.62 0.013 258);max-width:540px;">Upload invoices and let Munsiq's extraction model turn them into structured, exportable data in seconds.</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex-shrink:0;">
+        <div style="position:relative;width:38px;height:38px;border-radius:9px;background:oklch(0.19 0.006 258);border:1px solid oklch(1 0 0/8%);display:flex;align-items:center;justify-content:center;cursor:pointer;">
+          <i data-lucide="bell" style="width:17px;height:17px;color:oklch(0.66 0.014 258);"></i>
+          <div style="position:absolute;top:8px;right:9px;width:6px;height:6px;border-radius:50%;background:oklch(0.72 0.15 155);"></div>
+        </div>
+        <div style="width:38px;height:38px;border-radius:50%;background:oklch(0.3 0.01 258);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;">JD</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+      <div style="background:oklch(0.19 0.006 258);border:1px solid oklch(1 0 0/8%);border-radius:14px;padding:20px 22px;display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;color:oklch(0.62 0.013 258);font-weight:500;">Invoices Processed</span>
+          <i data-lucide="inbox" style="width:16px;height:16px;color:oklch(0.5 0.012 258);"></i>
+        </div>
+        <div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:-0.02em;">{{ processedCount }}</div>
+        <div style="font-size:12px;color:oklch(0.72 0.15 155);">+{{ doneCount }} this session</div>
+      </div>
+      <div style="background:oklch(0.19 0.006 258);border:1px solid oklch(1 0 0/8%);border-radius:14px;padding:20px 22px;display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;color:oklch(0.62 0.013 258);font-weight:500;">Extraction Accuracy</span>
+          <i data-lucide="percent" style="width:16px;height:16px;color:oklch(0.5 0.012 258);"></i>
+        </div>
+        <div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:-0.02em;">99.2%</div>
+        <div style="font-size:12px;color:oklch(0.55 0.012 258);">Rolling 30-day average</div>
+      </div>
+      <div style="background:oklch(0.19 0.006 258);border:1px solid oklch(1 0 0/8%);border-radius:14px;padding:20px 22px;display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;color:oklch(0.62 0.013 258);font-weight:500;">Time Saved</span>
+          <i data-lucide="clock" style="width:16px;height:16px;color:oklch(0.5 0.012 258);"></i>
+        </div>
+        <div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:-0.02em;">{{ timeSavedLabel }}</div>
+        <div style="font-size:12px;color:oklch(0.55 0.012 258);">vs. manual entry</div>
+      </div>
+    </div>
+
+    <div style="{{ dropzoneStyle }}" onDragOver="{{ onDragOver }}" onDragLeave="{{ onDragLeave }}" onDrop="{{ onDrop }}" onClick="{{ onDropZoneClick }}">
+      <div style="width:52px;height:52px;border-radius:14px;background:oklch(0.64 0.19 276/14%);display:flex;align-items:center;justify-content:center;">
+        <i data-lucide="upload-cloud" style="width:24px;height:24px;color:oklch(0.72 0.17 276);"></i>
+      </div>
+      <div style="font-size:16px;font-weight:600;">Drag &amp; drop invoices here</div>
+      <div style="font-size:13px;color:oklch(0.6 0.013 258);">PDF, PNG or JPG — batch upload up to 20 files at once</div>
+      <button style="margin-top:6px;padding:9px 18px;border-radius:9px;background:oklch(0.64 0.19 276);color:white;border:none;font-size:13px;font-weight:600;cursor:pointer;" onClick="{{ onBrowseButtonClick }}">Browse files</button>
+      <input ref="{{ fileInputRef }}" type="file" multiple="{{ true }}" style="display:none;" onChange="{{ onFileInputChange }}" />
+    </div>
+
+    <sc-if value="{{ isProcessing }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border-radius:12px;background:oklch(0.19 0.006 258);border:1px solid oklch(1 0 0/8%);">
+        <i data-lucide="loader-2" style="width:18px;height:18px;color:oklch(0.72 0.17 276);animation:spin 1s linear infinite;flex-shrink:0;"></i>
+        <div style="flex:1;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:6px;">AI Model Processing… {{ doneCount }} of {{ totalCount }} complete</div>
+          <div style="height:6px;border-radius:3px;background:oklch(1 0 0/8%);overflow:hidden;">
+            <div style="{{ overallBarStyle }}"></div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <div style="background:oklch(0.19 0.006 258);border:1px solid oklch(1 0 0/8%);border-radius:14px;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid oklch(1 0 0/8%);flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:15px;font-weight:600;">Extracted Data</span>
+          <span style="font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:oklch(1 0 0/8%);color:oklch(0.66 0.014 258);">{{ doneCount }} of {{ totalCount }}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="position:relative;">
+            <i data-lucide="search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:oklch(0.5 0.012 258);"></i>
+            <input type="text" placeholder="Search vendor or description" value="{{ search }}" onChange="{{ onSearchChange }}" style="padding:8px 12px 8px 32px;border-radius:8px;background:oklch(0.15 0.006 258);border:1px solid oklch(1 0 0/10%);color:oklch(0.94 0.003 258);font-size:13px;width:220px;outline:none;" />
+          </div>
+          <button style="{{ downloadButtonStyle }}" onClick="{{ onDownload }}" disabled="{{ downloadDisabled }}">
+            <i data-lucide="download" style="width:15px;height:15px;"></i>
+            <span>Download Excel (.xlsx)</span>
+          </button>
+        </div>
+      </div>
+
+      <sc-if value="{{ hasFiles }}" hint-placeholder-val="{{ false }}">
+        <div style="overflow-x:auto;">
+        <table style="width:100%;min-width:920px;border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="padding:11px 22px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:oklch(0.55 0.012 258);text-align:left;border-bottom:1px solid oklch(1 0 0/8%);">Vendor / File</th>
+              <th style="padding:11px 22px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:oklch(0.55 0.012 258);text-align:left;border-bottom:1px solid oklch(1 0 0/8%);">Invoice Date</th>
+              <th style="padding:11px 22px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:oklch(0.55 0.012 258);text-align:left;border-bottom:1px solid oklch(1 0 0/8%);">Description</th>
+              <th style="padding:11px 22px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:oklch(0.55 0.012 258);text-align:right;border-bottom:1px solid oklch(1 0 0/8%);">Subtotal</th>
+              <th style="padding:11px 22px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:oklch(0.55 0.012 258);text-align:right;border-bottom:1px solid oklch(1 0 0/8%);">Tax</th>
+              <th style="padding:11px 22px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:oklch(0.55 0.012 258);text-align:right;border-bottom:1px solid oklch(1 0 0/8%);">Total</th>
+              <th style="padding:11px 22px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:oklch(0.55 0.012 258);text-align:left;border-bottom:1px solid oklch(1 0 0/8%);">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{ filteredFiles }}" as="row" hint-placeholder-count="3">
+              <sc-if value="{{ row.isDone }}" hint-placeholder-val="{{ false }}">
+                <tr style-hover="{{ rowHoverStyle }}" style="border-bottom:1px solid oklch(1 0 0/6%);">
+                  <td style="padding:14px 22px;font-size:14px;">
+                    <div style="font-weight:600;">{{ row.vendor }}</div>
+                    <div style="font-size:12px;color:oklch(0.55 0.012 258);font-family:'JetBrains Mono',monospace;margin-top:2px;">{{ row.fileName }}</div>
+                  </td>
+                  <td style="padding:14px 22px;font-size:13px;color:oklch(0.75 0.012 258);font-family:'JetBrains Mono',monospace;white-space:nowrap;">{{ row.date }}</td>
+                  <td style="padding:14px 22px;font-size:13px;color:oklch(0.75 0.012 258);max-width:220px;">{{ row.description }}</td>
+                  <td style="padding:14px 22px;font-size:13px;text-align:right;font-family:'JetBrains Mono',monospace;white-space:nowrap;">{{ row.subtotalLabel }}</td>
+                  <td style="padding:14px 22px;font-size:13px;text-align:right;font-family:'JetBrains Mono',monospace;color:oklch(0.6 0.013 258);white-space:nowrap;">{{ row.taxLabel }}</td>
+                  <td style="padding:14px 22px;font-size:14px;text-align:right;font-weight:700;font-family:'JetBrains Mono',monospace;white-space:nowrap;">{{ row.totalLabel }}</td>
+                  <td style="padding:14px 22px;">
+                    <sc-if value="{{ row.showExtracted }}" hint-placeholder-val="{{ true }}">
+                      <span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:99px;background:oklch(0.72 0.15 155/14%);color:oklch(0.72 0.15 155);font-size:12px;font-weight:600;white-space:nowrap;">
+                        <i data-lucide="check" style="width:12px;height:12px;"></i>Extracted
+                      </span>
+                    </sc-if>
+                    <sc-if value="{{ row.showReview }}" hint-placeholder-val="{{ false }}">
+                      <span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:99px;background:oklch(0.75 0.15 80/14%);color:oklch(0.75 0.15 80);font-size:12px;font-weight:600;white-space:nowrap;">
+                        <i data-lucide="alert-triangle" style="width:12px;height:12px;"></i>Needs review
+                      </span>
+                    </sc-if>
+                  </td>
+                </tr>
+              </sc-if>
+              <sc-if value="{{ row.isProcessingRow }}" hint-placeholder-val="{{ true }}">
+                <tr style="border-bottom:1px solid oklch(1 0 0/6%);">
+                  <td style="padding:14px 22px;">
+                    <div style="font-weight:600;display:flex;align-items:center;gap:8px;">
+                      <i data-lucide="file-text" style="width:14px;height:14px;color:oklch(0.5 0.012 258);"></i>
+                      <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:oklch(0.7 0.013 258);">{{ row.fileName }}</span>
+                    </div>
+                  </td>
+                  <td colSpan="5" style="padding:14px 22px;">
+                    <div style="height:6px;border-radius:3px;background:oklch(1 0 0/8%);overflow:hidden;max-width:360px;">
+                      <div style="{{ row.progressStyle }}"></div>
+                    </div>
+                  </td>
+                  <td style="padding:14px 22px;">
+                    <span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:99px;background:oklch(1 0 0/8%);color:oklch(0.66 0.014 258);font-size:12px;font-weight:600;white-space:nowrap;">
+                      <i data-lucide="loader-2" style="width:12px;height:12px;animation:spin 1s linear infinite;"></i>Processing
+                    </span>
+                  </td>
+                </tr>
+              </sc-if>
+            </sc-for>
+          </tbody>
+        </table>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ noFiles }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:56px 24px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;">
+          <i data-lucide="inbox" style="width:32px;height:32px;color:oklch(0.4 0.012 258);"></i>
+          <div style="font-size:14px;color:oklch(0.6 0.013 258);">No invoices processed yet — upload a batch above to see extracted data here.</div>
+        </div>
+      </sc-if>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;autoDemo&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Demo behavior&quot;},
+  &quot;processingSpeed&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;default&quot;: &quot;Fast&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;options&quot;: [&quot;Fast&quot;, &quot;Realistic&quot;], &quot;section&quot;: &quot;Demo behavior&quot;},
+  &quot;flagLowConfidence&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Demo behavior&quot;}
+}">
+class Component extends DCLogic {
+  state = { files: [], search: '', isDragging: false };
+  nextId = 1;
+  intervals = {};
+  processedBase = 128;
+  timeSavedBase = 34.5;
+  fileInputRef = React.createRef();
+
+  pool = [
+    { vendor: 'Nimbus Cloud Services', date: '2026-06-18', description: 'Cloud infrastructure & compute hours', subtotal: 4820.00, taxRate: 0.0825 },
+    { vendor: 'Meridian Office Supplies', date: '2026-06-20', description: 'Office furniture and equipment', subtotal: 2150.50, taxRate: 0.07 },
+    { vendor: 'Atlas Freight & Logistics', date: '2026-06-15', description: 'Freight shipping — Q2 batch', subtotal: 9340.00, taxRate: 0 },
+    { vendor: 'Bluepeak Consulting Group', date: '2026-06-22', description: 'Strategic advisory services, June', subtotal: 12500.00, taxRate: 0 },
+    { vendor: 'Sterling Print & Design', date: '2026-06-19', description: 'Marketing collateral printing', subtotal: 875.25, taxRate: 0.06 },
+    { vendor: 'Vantage Legal Partners', date: '2026-06-21', description: 'Contract review & compliance', subtotal: 3600.00, taxRate: 0 },
+    { vendor: 'Ferrow Industrial Parts', date: '2026-06-17', description: 'Replacement machine components', subtotal: 5420.75, taxRate: 0.085 },
+    { vendor: 'Cascade Utilities Co.', date: '2026-06-16', description: 'Facility electricity & water, June', subtotal: 1230.40, taxRate: 0 }
+  ];
+
+  componentDidMount() {
+    if (window.lucide) window.lucide.createIcons();
+    if (this.props.autoDemo !== false) {
+      setTimeout(() => {
+        this.handleFiles([
+          { name: 'INV-20487_NimbusCloud.pdf', size: 214532 },
+          { name: 'INV-20488_Meridian.pdf', size: 188210 },
+          { name: 'INV-20489_AtlasFreight.pdf', size: 305120 },
+          { name: 'INV-20490_Bluepeak.pdf', size: 172004 }
+        ]);
+      }, 700);
+    }
+  }
+
+  componentDidUpdate() {
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  componentWillUnmount() {
+    Object.values(this.intervals).forEach(clearInterval);
+  }
+
+  formatCurrency(n) {
+    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  formatBytes(bytes) {
+    if (bytes === undefined || bytes === null) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let n = bytes, i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+  }
+
+  handleFiles = (fileList) => {
+    const arr = Array.from(fileList || []);
+    if (!arr.length) return;
+    const startIndex = this.state.files.length;
+    const flagOn = this.props.flagLowConfidence !== false;
+    const newRows = arr.map((f, i) => {
+      const rec = this.pool[(startIndex + i) % this.pool.length];
+      const tax = Math.round(rec.subtotal * rec.taxRate * 100) / 100;
+      const total = Math.round((rec.subtotal + tax) * 100) / 100;
+      const id = this.nextId++;
+      const needsReview = flagOn && ((startIndex + i) % 4 === 2);
+      return {
+        id,
+        fileName: f.name,
+        sizeLabel: this.formatBytes(f.size),
+        progress: 0,
+        status: 'processing',
+        needsReview,
+        vendor: rec.vendor,
+        date: rec.date,
+        description: rec.description,
+        subtotalLabel: this.formatCurrency(rec.subtotal),
+        taxLabel: this.formatCurrency(tax),
+        totalLabel: this.formatCurrency(total),
+        subtotal: rec.subtotal, tax, total
+      };
+    });
+    this.setState(s => ({ files: [...s.files, ...newRows] }));
+    newRows.forEach(r => this.startProgress(r.id));
+  };
+
+  startProgress = (id) => {
+    const tickMs = this.props.processingSpeed === 'Realistic' ? 380 : 220;
+    const timer = setInterval(() => {
+      const step = this.props.processingSpeed === 'Realistic' ? (3 + Math.random() * 6) : (10 + Math.random() * 16);
+      this.setState(s => {
+        let finished = false;
+        const files = s.files.map(f => {
+          if (f.id !== id || f.status === 'done') return f;
+          const next = f.progress + step;
+          if (next >= 100) { finished = true; return { ...f, progress: 100, status: 'done' }; }
+          return { ...f, progress: next };
+        });
+        if (finished) { clearInterval(this.intervals[id]); delete this.intervals[id]; }
+        return { files };
+      });
+    }, tickMs);
+    this.intervals[id] = timer;
+  };
+
+  handleDownload = () => {
+    const rows = this.state.files.filter(f => f.status === 'done').map(f => ({
+      Vendor: f.vendor, 'Invoice Date': f.date, Description: f.description,
+      Subtotal: f.subtotal, Tax: f.tax, Total: f.total,
+      Status: f.needsReview ? 'Needs review' : 'Extracted'
+    }));
+    if (!rows.length) return;
+    if (window.XLSX) {
+      const ws = window.XLSX.utils.json_to_sheet(rows);
+      const wb = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+      window.XLSX.writeFile(wb, 'munsiq-invoices.xlsx');
+    } else {
+      const header = Object.keys(rows[0]).join(',');
+      const body = rows.map(r => Object.values(r).map(v => typeof v === 'string' ? '"' + v.replace(/"/g, '""') + '"' : v).join(',')).join('\n');
+      const blob = new Blob([header + '\n' + body], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'munsiq-invoices.csv'; a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  renderVals() {
+    const { files, search, isDragging } = this.state;
+    const doneCount = files.filter(f => f.status === 'done').length;
+    const totalCount = files.length;
+    const isProcessing = totalCount > 0 && doneCount < totalCount;
+    const overallPercent = totalCount ? Math.round(files.reduce((a, f) => a + f.progress, 0) / totalCount) : 0;
+    const q = search.trim().toLowerCase();
+    const filteredFiles = files.filter(f => {
+      if (!q) return true;
+      return ((f.vendor || '') + ' ' + f.fileName + ' ' + (f.description || '')).toLowerCase().includes(q);
+    }).map(f => ({
+      ...f,
+      isDone: f.status === 'done',
+      isProcessingRow: f.status !== 'done',
+      showExtracted: f.status === 'done' && !f.needsReview,
+      showReview: f.status === 'done' && !!f.needsReview,
+      progressStyle: { height: '100%', borderRadius: '3px', background: 'oklch(0.64 0.19 276)', width: f.progress + '%', transition: 'width .2s ease' }
+    }));
+    const downloadDisabled = doneCount === 0;
+    return {
+      processedCount: this.processedBase + doneCount,
+      doneCount, totalCount, isProcessing, overallPercent,
+      hasFiles: totalCount > 0,
+      noFiles: totalCount === 0,
+      filteredFiles,
+      search,
+      timeSavedLabel: (this.timeSavedBase + doneCount * 0.2).toFixed(1) + ' hrs',
+      dropzoneStyle: {
+        border: '2px dashed ' + (isDragging ? 'oklch(0.64 0.19 276)' : 'oklch(1 0 0 / 14%)'),
+        background: isDragging ? 'oklch(0.64 0.19 276 / 10%)' : 'oklch(0.19 0.006 258)',
+        borderRadius: '16px', padding: '48px 32px', display: 'flex', flexDirection: 'column',
+        alignItems: 'center', gap: '10px', textAlign: 'center', cursor: 'pointer', transition: 'all .15s ease'
+      },
+      overallBarStyle: { height: '100%', borderRadius: '3px', background: 'oklch(0.64 0.19 276)', width: overallPercent + '%', transition: 'width .3s ease' },
+      rowHoverStyle: { background: 'oklch(0.23 0.007 258)' },
+      downloadButtonStyle: {
+        display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 16px', borderRadius: '9px', border: 'none',
+        fontSize: '13px', fontWeight: 700, cursor: downloadDisabled ? 'not-allowed' : 'pointer',
+        background: downloadDisabled ? 'oklch(1 0 0 / 8%)' : 'oklch(0.64 0.19 276)',
+        color: downloadDisabled ? 'oklch(0.5 0.012 258)' : 'white', opacity: downloadDisabled ? 0.7 : 1
+      },
+      downloadDisabled,
+      onDragOver: (e) => { e.preventDefault(); if (!this.state.isDragging) this.setState({ isDragging: true }); },
+      onDragLeave: (e) => { e.preventDefault(); this.setState({ isDragging: false }); },
+      onDrop: (e) => { e.preventDefault(); this.setState({ isDragging: false }); this.handleFiles(e.dataTransfer.files); },
+      onDropZoneClick: () => { this.fileInputRef.current && this.fileInputRef.current.click(); },
+      onBrowseButtonClick: (e) => { e.stopPropagation(); this.fileInputRef.current && this.fileInputRef.current.click(); },
+      onFileInputChange: (e) => { this.handleFiles(e.target.files); e.target.value = ''; },
+      onSearchChange: (e) => { this.setState({ search: e.target.value }); },
+      onDownload: this.handleDownload,
+      fileInputRef: this.fileInputRef
+    };
+  }
+}
+</script>
+</body>
+</html>

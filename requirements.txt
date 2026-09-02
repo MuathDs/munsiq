@@ -1,0 +1,9 @@
+# ---------------------------------------------------------------------------
+# munsiq — dependencies
+# ---------------------------------------------------------------------------
+
+# Batch reporting pipeline (src/data_pipeline/build_report.py):
+# raw text -> local Ollama model -> flattened Excel / Power BI CSV.
+requests>=2.31
+pandas>=2.0
+openpyxl>=3.1

@@ -1,0 +1,23 @@
+FROM ./Qwen2.5-7B-Instruct.Q4_K_M.gguf
+
+# Pass the prompt straight through -- no ChatML wrapping.
+# This model was fine-tuned on a custom raw completion template (schema + text
+# + blank output), not Qwen's native chat format, so Ollama must not re-wrap it.
+TEMPLATE """{{ .Prompt }}"""
+
+# Stop token matching the EOS used during training -- prevents rambling past the JSON
+PARAMETER stop "<|im_end|>"
+
+# Context window -- matches training max_seq_length, keeps KV-cache small for 4GB VRAM
+PARAMETER num_ctx 2048
+
+# GPU layers to offload -- starting estimate for a 4GB card (~half of Qwen2.5-7B's
+# 28 layers). Watch `nvidia-smi` / `ollama ps` while generating and adjust:
+# lower if it crashes or VRAM is maxed, raise a couple at a time if there's headroom.
+PARAMETER num_gpu 15
+
+# CPU threads for the layers NOT offloaded to GPU -- set to (CPU core count - 2)
+PARAMETER num_thread 6
+
+# Low temperature -- structured extraction, not creative generation
+PARAMETER temperature 0.1
