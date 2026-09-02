@@ -1,0 +1,75 @@
+[project]
+name = "munsiq-backend"
+version = "0.1.0"
+description = "Munsiq — Arabic/English invoice extraction for Saudi B2B (ZATCA)."
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "pypdf>=5",          # ZATCA Step Zero: walk /EmbeddedFiles for the UBL attachment
+    # UBL 2.1 parsing with explicit namespace maps.
+    # Pinned <6 deliberately. On this Windows machine a WDAC code-integrity
+    # policy (ID {0283ac0f-fff1-49ae-ada1-8a933130cad6}) refuses to load lxml
+    # 6.x's unsigned etree.pyd — "DLL load failed ... Application Control policy
+    # has blocked this file", CodeIntegrity event 3033/3077. 5.3.0 loads fine,
+    # so the block tracks binary reputation, not lxml itself. Revisit if the
+    # policy changes; do not widen this pin without re-testing the import.
+    "lxml>=5,<6",
+    "python-multipart>=0.0.9",  # multipart/form-data for the probe upload
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "lxml-stubs>=0.5",  # lxml ships no inline types; mypy --strict needs these
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# --------------------------------------------------------------------------- #
+# Tooling
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are called in argument defaults by design; that
+# is the framework's idiom, not the B008 mutable-default bug.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["pypdf.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:app.*"]
