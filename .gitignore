@@ -47,8 +47,10 @@ htmlcov/
 *.pt
 *.bin
 *.safetensors
-models/
-checkpoints/
+# Anchored to the repo root. Unanchored, `models/` also matched
+# backend/app/db/models/ — the ORM package — and silently excluded it.
+/models/
+/checkpoints/
 mlruns/
 wandb/
 

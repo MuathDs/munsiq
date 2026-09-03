@@ -24,6 +24,29 @@ the execution plan. Do NOT build 3.5, 5.5, 8, 9, 10 or 11 unless asked.
 `document_parts` stays in the Phase 2 schema even though nothing populates it —
 two lines now, no migration later.
 
+## Deferred — not skipped
+- **Dedicated low-privilege application role.** The execution plan calls for a
+  non-superuser role that RLS applies to, with the app never connecting as the
+  table owner. Deferred: we are on Supabase, which provisions its own `postgres`
+  role and a connection pooler, and wiring a custom role through the pooler is
+  more complexity than a portfolio project needs right now.
+
+  This has a consequence that must NOT be glossed over. In Postgres, RLS
+  policies do not constrain everyone equally:
+  - a table's **owner bypasses RLS** unless the table is declared
+    `FORCE ROW LEVEL SECURITY`;
+  - a **superuser or a role with `BYPASSRLS` bypasses RLS unconditionally**, and
+    `FORCE` does not change that.
+
+  So "RLS is enabled" is not by itself proof of tenant isolation — it depends on
+  who connects. Until the dedicated role exists, the mitigations are:
+  1. every org-scoped table gets `ENABLE` **and** `FORCE ROW LEVEL SECURITY`;
+  2. the RLS isolation test asserts under a role that does not bypass RLS
+     (e.g. `SET ROLE authenticated`, which Supabase already provisions — this
+     creates no new role), so the test proves policy enforcement rather than
+     passing vacuously.
+  Revisit before this is exposed to anyone else's data.
+
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.
 - NEVER read tenant identity from a request body or query param. Only from the verified JWT.

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 # Make `app` importable without an editable install, so `pytest` works straight
 # out of a fresh venv on Windows.
@@ -62,3 +64,22 @@ HAS_SCAN_SAMPLE = any(s.expects_embedded_xml is False for s in SAMPLES)
 @pytest.fixture(scope="session")
 def samples() -> list[Sample]:
     return SAMPLES
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _dispose_engine() -> AsyncIterator[None]:
+    """Close the async engine inside the session loop.
+
+    Without this the pool is garbage-collected after the loop has closed, which
+    surfaces as a noisy "Event loop is closed" during teardown.
+    """
+    yield
+    from app.config import get_settings
+
+    if not get_settings().DATABASE_URL:
+        return
+    from app.db import base
+
+    if base._engine is not None:
+        await base._engine.dispose()
+        base._engine = None

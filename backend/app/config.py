@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     ENVIRONMENT: Literal["local", "dev", "prod"] = "local"
     API_V1_PREFIX: str = "/api/v1"
 
+    # PostgreSQL DSN. Supabase hands out a `postgresql://` URL; we normalize it
+    # to the asyncpg driver below so either form works in .env.
+    DATABASE_URL: str = ""
+    DB_ECHO: bool = False
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
+
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     # Registers temporary, UNAUTHENTICATED debug routes (currently the document
@@ -43,6 +50,23 @@ class Settings(BaseSettings):
     INFERENCE_MODEL: str = "munsiq-extractor"
 
     MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
+
+    @property
+    def async_database_url(self) -> str:
+        """DATABASE_URL forced onto the asyncpg driver.
+
+        Supabase's dashboard gives out `postgresql://...`, which SQLAlchemy would
+        route to psycopg. Normalizing here means .env can hold either form and
+        nothing downstream has to care.
+        """
+        url = self.DATABASE_URL
+        if url.startswith("postgresql+"):
+            return url
+        if url.startswith("postgresql://"):
+            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if url.startswith("postgres://"):
+            return url.replace("postgres://", "postgresql+asyncpg://", 1)
+        return url
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
