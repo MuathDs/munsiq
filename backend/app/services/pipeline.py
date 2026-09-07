@@ -20,6 +20,7 @@ why. A task must never die silently.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -42,6 +43,8 @@ from app.services.ubl import (
     extract_embedded_xml,
     parse_ubl_invoice,
 )
+from app.services.validation import run_rules
+from app.services.validation.context import build_context
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,7 @@ class PipelineOutcome:
     page_count: int = 0
     field_count: int = 0
     degraded_pages: list[int] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
     status: str = "to_review"
     error: str | None = None
 
@@ -100,6 +104,7 @@ async def _process(
     # 1. STEP ZERO
     # ---------------------------------------------------------------- #
     ubl_values: dict[str, str] = {}
+    ubl_invoice = None
     embedded_key: str | None = None
     try:
         xml_bytes = extract_embedded_xml(pdf_bytes)
@@ -111,6 +116,7 @@ async def _process(
         storage.put(embedded_key, xml_bytes)
         try:
             invoice = parse_ubl_invoice(xml_bytes)
+            ubl_invoice = invoice
             ubl_values = {
                 key: field.value
                 for key, field in invoice.to_extracted_fields().items()
@@ -199,6 +205,21 @@ async def _process(
     outcome.field_count = len(result.values)
 
     # ---------------------------------------------------------------- #
+    # 4b. Deterministic validation — runs before the annotation reaches
+    # 'to_review', so a reviewer never sees an unchecked document.
+    # ---------------------------------------------------------------- #
+    report = run_rules(
+        build_context(values=result.values, fields=fields, pages=pages, invoice=ubl_invoice)
+    )
+    blocking_keys = report.blocking_field_keys
+    outcome.blockers = report.blockers
+    for value in result.values:
+        if value.field_key in blocking_keys:
+            # An unresolved error freezes the field: the confirm endpoint
+            # refuses while any blocking state remains.
+            value.validation_state = "blocking"
+
+    # ---------------------------------------------------------------- #
     # 5. Persist
     # ---------------------------------------------------------------- #
     async with session_scope(org_id) as session:
@@ -250,8 +271,9 @@ async def _process(
         annotation_id = await session.scalar(
             sql(
                 "INSERT INTO annotations (org_id, document_id, part_id, schema_id, status, "
-                "model_version, automated, latency_ms) "
-                "VALUES (:org, :doc, :part, :schema, 'to_review', :model, :auto, :ms) "
+                "model_version, automated, latency_ms, blockers) "
+                "VALUES (:org, :doc, :part, :schema, 'to_review', :model, :auto, :ms, "
+                "CAST(:blockers AS jsonb)) "
                 "RETURNING id"
             ),
             {
@@ -260,8 +282,11 @@ async def _process(
                 "part": part_id,
                 "schema": schema_id,
                 "model": result.model or None,
-                "auto": outcome.has_embedded_ubl,
+                # Automated only if UBL answered AND nothing blocks it.
+                "auto": outcome.has_embedded_ubl and not report.blockers,
                 "ms": result.latency_ms or None,
+                # The UI reads this to explain WHY a document was not automated.
+                "blockers": json.dumps(report.blockers),
             },
         )
         outcome.annotation_id = annotation_id
@@ -289,6 +314,7 @@ async def _process(
             )
 
         await _record_findings(session, org_id, annotation_id, pages, result)
+        await _record_rule_results(session, org_id, annotation_id, report)
 
     logger.info(
         "pipeline.done",
@@ -408,8 +434,6 @@ _AR_MESSAGE = {
 
 
 def _json_or_none(value: dict[str, float | int] | None) -> str | None:
-    import json
-
     return None if value is None else json.dumps(value)
 
 
@@ -423,3 +447,29 @@ async def _mark_failed(org_id: uuid.UUID, document_id: uuid.UUID, error: str) ->
             )
     except Exception:
         logger.exception("pipeline.mark_failed_failed")
+
+
+async def _record_rule_results(session, org_id, annotation_id, report) -> None:  # type: ignore[no-untyped-def]
+    """Write one validation_results row per rule outcome, passes included.
+
+    Passing rows are kept deliberately: the compliance panel needs to show that
+    a check ran and succeeded, which is different from the check never running.
+    """
+    for result in report.results:
+        await session.execute(
+            sql(
+                "INSERT INTO validation_results (org_id, annotation_id, rule_code, severity, "
+                "message_ar, message_en, field_key, passed) "
+                "VALUES (:org, :ann, :code, :sev, :ar, :en, :key, :passed)"
+            ),
+            {
+                "org": org_id,
+                "ann": annotation_id,
+                "code": result.code,
+                "sev": result.severity.value,
+                "ar": result.message_ar,
+                "en": result.message_en,
+                "key": result.field_key,
+                "passed": result.passed,
+            },
+        )
