@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # PostgreSQL DSN. Supabase hands out a `postgresql://` URL; we normalize it
     # to the asyncpg driver below so either form works in .env.
     DATABASE_URL: str = ""
+    # Role the application drops to for every request transaction, via
+    # SET LOCAL ROLE. Supabase's `postgres` carries BYPASSRLS, so without this
+    # the app's own queries are not constrained by RLS at all. `authenticated`
+    # is provisioned by Supabase and has neither superuser nor BYPASSRLS.
+    # Set to "" to disable the switch (only correct if DATABASE_URL already
+    # points at a non-bypassing role). Migrations never use this — see
+    # app/db/session.py.
+    DB_APP_ROLE: str = "authenticated"
+
     DB_ECHO: bool = False
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 5

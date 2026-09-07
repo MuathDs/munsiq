@@ -14,8 +14,8 @@ from sqlalchemy import (
     Integer,
     Numeric,
     Text,
-    text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -63,9 +63,7 @@ class Annotation(Base, OrgScopedMixin):
     automated: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     # Rule codes that prevented automation, so the UI can explain WHY a document
     # was not automated instead of just showing that it wasn't.
-    blockers: Mapped[list[Any]] = mapped_column(
-        JSONB, nullable=False, server_default="'[]'"
-    )
+    blockers: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default="'[]'")
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")

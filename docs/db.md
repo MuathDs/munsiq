@@ -28,7 +28,7 @@ Had we only `ENABLE`d RLS, every policy would exist, look correct in the schema,
 and be silently skipped for the exact role the application connects as. `FORCE`
 removes the owner exemption. It is applied to all 18 protected tables.
 
-## The bypass caveat — read before trusting isolation
+## The bypass caveat — closed
 
 Measured against this project's Supabase instance:
 
@@ -39,12 +39,41 @@ rolbypassrls : true      <-- bypasses RLS unconditionally
 ```
 
 `postgres` is not a superuser here, but it carries `BYPASSRLS`, and `FORCE` does
-not override that. **Today, RLS does not constrain the application's own
-connection.** The policies are correct and enforced for every non-bypassing
-role; they are simply not reached by this one.
+not override that. Connecting as this role and setting only the GUC would leave
+the application *adjacent* to RLS rather than subject to it.
 
-That is a deliberate, temporary trade-off — see "Deferred: dedicated application
-role" below — and it is why the isolation tests are written the way they are.
+**This is now closed at the session layer.** `session_scope()` issues
+`SET LOCAL ROLE authenticated` in the same transaction as the GUC, before any
+query runs. Both statements are transaction-local, so the elevated connection
+role returns on commit or rollback and cannot leak to the next checkout from the
+pool. The role is `settings.DB_APP_ROLE` (default `authenticated`); setting it to
+`""` disables the switch, which is only correct if `DATABASE_URL` already points
+at a non-bypassing role.
+
+The connection still authenticates as `postgres` — that has not changed, and a
+dedicated login role is still the cleaner end state (below). What changed is that
+no application query now *executes* as a bypassing role.
+
+### Evidence, not assertion
+
+Same connection, same query, same GUC, two seeded tenants — only the effective
+role differs:
+
+| | executing as | `rolbypassrls` | rows visible |
+| --- | --- | --- | --- |
+| No `SET ROLE` | `postgres` | true | **2 of 2** |
+| After `SET LOCAL ROLE authenticated` | `authenticated` | false | **1 of 2** |
+
+And over HTTP, with the role switch disabled (`DB_APP_ROLE=""`), the API-level
+test fails exactly as it should:
+
+```
+AssertionError: tenant B's annotation was returned to tenant A over HTTP
+                — the request path is not constrained by RLS
+```
+
+Filtering appears precisely when the role stops bypassing RLS. The isolation is
+produced by RLS and by nothing else.
 
 For reference, the roles on this instance:
 
@@ -77,6 +106,63 @@ Plus two drift guards: every org-scoped table in the ORM must have RLS enabled
 *and* forced, and must have a policy. Adding a model with an `org_id` and
 forgetting the migration fails the suite.
 
+## Isolation over the HTTP request path
+
+`backend/tests/test_api_tenancy.py` proves the *application* is subject to RLS,
+not just that the policies work when queried directly. Requests go through the
+real ASGI app, router, session dependency, role switch and policies.
+
+The only substituted piece is `get_current_org_id` — the JWT claim reader, which
+does not exist until auth lands. Tests override it via
+`app.dependency_overrides`, standing in for the token a real caller would
+present. Everything downstream is production code.
+
+Two properties make that test meaningful:
+
+- **The endpoints contain no `org_id` filter at all.** `app/api/annotations.py`
+  issues `SELECT ... FROM annotations` with no tenant predicate. There is no
+  second line of defence, so if RLS stopped working the test would see both
+  tenants and fail.
+- **The unauthenticated case is asserted too.** With no override, the real
+  dependency runs and must return 501. It deliberately has no fallback to a
+  header, query parameter or "default org": that value feeds the RLS GUC
+  directly, so accepting a caller-supplied one would let anyone choose which
+  tenant to read.
+
+## Grants required by the application role
+
+Audited before anything was granted; `authenticated` already had everything:
+
+| Layer | Status |
+| --- | --- |
+| `USAGE` on schema `public` | present |
+| `SELECT/INSERT/UPDATE/DELETE` on all 19 tables | present (granted by the initial migration) |
+| `USAGE` on `audit_log_id_seq`, `field_corrections_id_seq` | present |
+
+The sequence grants come from Supabase's default privileges rather than our
+migration. On a non-Supabase Postgres, a `BIGSERIAL` insert as the application
+role would fail with a permission error until those are granted explicitly —
+worth remembering when the dedicated role below is created.
+
+`test_app_session_can_insert_and_update` covers INSERT, UPDATE and a `BIGSERIAL`
+insert through `session_scope`, so a missing sequence grant surfaces in the test
+suite rather than in production.
+
+## Migrations keep the owner role
+
+Alembic must NOT inherit the role switch — `authenticated` has no `CREATE` on
+`public`, so DDL as that role fails. `alembic/env.py` builds its own engine via
+`app.db.base.make_engine` and never touches `session_scope`, which keeps the two
+paths separate.
+
+`test_migration_path_does_not_inherit_the_app_role` asserts the raw engine path
+is not the application role and still holds `CREATE` on `public`, so moving the
+switch into `make_engine` or a connect event would fail the suite instead of
+breaking every future migration.
+
+Verified after the change: `downgrade base` → `upgrade head` round-trips
+cleanly, and `alembic check` reports no drift.
+
 ## Deferred: dedicated application role
 
 The execution plan calls for a non-superuser application role that RLS applies
@@ -85,21 +171,22 @@ provisions its own `postgres` role and a connection pooler, and wiring a custom
 role through the pooler is more complexity than this portfolio project needs
 right now.
 
-Consequences, stated plainly:
+Consequences, as they now stand:
 
-- Tenant isolation is enforced by the database for any non-bypassing role, and
-  is proven under `authenticated` by the test suite.
-- It is **not** enforced for the application's current connection. Today the
-  app's own correctness — always setting the GUC, never deriving `org_id` from
-  user input — is what separates tenants on that path. RLS is defence in depth
-  that is not yet reached.
-- This must be closed before the system holds data belonging to anyone other
-  than the developer.
+- Tenant isolation **is** enforced by the database on the application path, via
+  `SET LOCAL ROLE authenticated` in `session_scope()`, and is proven end to end
+  over HTTP by `tests/test_api_tenancy.py`.
+- What remains is narrower than it was: the connection still *authenticates* as
+  a `BYPASSRLS` role, so a code path that opened a session without going through
+  `session_scope()` would run unconstrained. The mitigation is convention plus
+  tests, not the database.
+- A dedicated login role removes that last gap by making the bypass unreachable
+  rather than merely unused.
 
 Closing it means: create a `LOGIN` role without `BYPASSRLS`, `GRANT` it DML on
-the application tables, point `DATABASE_URL` at it, and keep running migrations
-as `postgres`. The RLS policies themselves need no change — they already work,
-as the tests under `authenticated` demonstrate.
+the application tables **and `USAGE` on the sequences**, point `DATABASE_URL` at
+it, keep running migrations as `postgres`, and set `DB_APP_ROLE=""` so no
+redundant switch happens. The RLS policies themselves need no change.
 
 ## Tables not covered by RLS, on purpose
 

@@ -34,9 +34,7 @@ class EvalSet(Base, OrgScopedMixin):
 
 class GroundTruthField(Base, OrgScopedMixin):
     __tablename__ = "ground_truth_fields"
-    __table_args__ = (
-        UniqueConstraint("eval_set_id", "document_id", "field_key", "row_index"),
-    )
+    __table_args__ = (UniqueConstraint("eval_set_id", "document_id", "field_key", "row_index"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
     org_id: Mapped[uuid.UUID] = org_fk()

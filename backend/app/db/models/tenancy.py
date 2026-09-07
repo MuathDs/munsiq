@@ -26,7 +26,9 @@ class Organization(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     name: Mapped[str] = mapped_column(Text, nullable=False)
     vat_number: Mapped[str | None] = mapped_column(Text)
-    data_region: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'ksa-dammam'"))
+    data_region: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'ksa-dammam'")
+    )
     retention_days: Mapped[int] = mapped_column(nullable=False, server_default=text("365"))
     created_at: Mapped[datetime] = created_at_col()
 

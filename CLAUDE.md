@@ -25,27 +25,24 @@ the execution plan. Do NOT build 3.5, 5.5, 8, 9, 10 or 11 unless asked.
 two lines now, no migration later.
 
 ## Deferred — not skipped
-- **Dedicated low-privilege application role.** The execution plan calls for a
-  non-superuser role that RLS applies to, with the app never connecting as the
-  table owner. Deferred: we are on Supabase, which provisions its own `postgres`
-  role and a connection pooler, and wiring a custom role through the pooler is
-  more complexity than a portfolio project needs right now.
+- **Dedicated low-privilege application role.** Still deferred, but the gap it
+  left is now closed at the session layer.
 
-  This has a consequence that must NOT be glossed over. In Postgres, RLS
-  policies do not constrain everyone equally:
-  - a table's **owner bypasses RLS** unless the table is declared
-    `FORCE ROW LEVEL SECURITY`;
-  - a **superuser or a role with `BYPASSRLS` bypasses RLS unconditionally**, and
-    `FORCE` does not change that.
+  Supabase's `postgres` role has `rolbypassrls=true`, and `FORCE ROW LEVEL
+  SECURITY` does not override that. So `session_scope()` in
+  `app/db/session.py` issues `SET LOCAL ROLE` to `settings.DB_APP_ROLE`
+  (default `authenticated` — no superuser, no BYPASSRLS) in the same
+  transaction as the `app.current_org_id` GUC. Both are transaction-local.
+  The application path is therefore subject to RLS, proven over HTTP by
+  `tests/test_api_tenancy.py`.
 
-  So "RLS is enabled" is not by itself proof of tenant isolation — it depends on
-  who connects. Until the dedicated role exists, the mitigations are:
-  1. every org-scoped table gets `ENABLE` **and** `FORCE ROW LEVEL SECURITY`;
-  2. the RLS isolation test asserts under a role that does not bypass RLS
-     (e.g. `SET ROLE authenticated`, which Supabase already provisions — this
-     creates no new role), so the test proves policy enforcement rather than
-     passing vacuously.
-  Revisit before this is exposed to anyone else's data.
+  What remains: the connection still *authenticates* as a BYPASSRLS role, so a
+  session opened outside `session_scope()` would run unconstrained. A dedicated
+  LOGIN role makes the bypass unreachable rather than merely unused. See
+  docs/db.md for the exact steps, including the sequence grants.
+
+  HARD RULE: Alembic must never inherit the role switch — `authenticated`
+  cannot run DDL. `alembic/env.py` builds its own engine on purpose.
 
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.

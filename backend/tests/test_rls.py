@@ -32,9 +32,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.base import get_sessionmaker
+from app.db.base import get_engine, get_sessionmaker
 from app.db.models import org_scoped_tables
-from app.db.session import ORG_GUC
+from app.db.session import ORG_GUC, session_scope
 
 pytestmark = pytest.mark.skipif(
     not get_settings().DATABASE_URL,
@@ -261,6 +261,129 @@ async def test_the_test_role_does_not_bypass_rls() -> None:
             f"{NON_BYPASSING_ROLE} gained BYPASSRLS — the isolation tests are "
             f"no longer valid and must move to another role"
         )
+
+
+# --------------------------------------------------------------------------- #
+# The application path — session_scope() as the app actually uses it
+# --------------------------------------------------------------------------- #
+async def test_app_session_runs_as_the_non_bypassing_role(
+    tenants: tuple[Tenant, Tenant],
+) -> None:
+    """session_scope must drop the connection role, not just set the GUC."""
+    org_a, _org_b = tenants
+
+    async with session_scope(org_a.org_id) as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT current_user AS role, "
+                    "(SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypass, "
+                    "current_setting('app.current_org_id', true) AS org"
+                )
+            )
+        ).one()
+
+    assert row.role == NON_BYPASSING_ROLE
+    assert row.bypass is False, "the app path is running as a role that bypasses RLS"
+    assert row.org == str(org_a.org_id)
+
+
+async def test_app_session_can_insert_and_update(tenants: tuple[Tenant, Tenant]) -> None:
+    """Writes must still work once the app is constrained by RLS.
+
+    Covers UPDATE as well as INSERT, and exercises a BIGSERIAL table so a
+    missing sequence USAGE grant would surface here rather than in production.
+    """
+    org_a, _org_b = tenants
+    trn = "310122393510003"
+
+    async with session_scope(org_a.org_id) as session:
+        vendor_id = await session.scalar(
+            text(
+                "INSERT INTO vendors (org_id, trn, name_en) "
+                "VALUES (:org, :trn, 'Acme Industrial') RETURNING id"
+            ),
+            {"org": org_a.org_id, "trn": trn},
+        )
+        assert vendor_id is not None
+
+        await session.execute(
+            text("UPDATE vendors SET name_ar = :ar WHERE id = :id"),
+            {"ar": "أكمي الصناعية", "id": vendor_id},
+        )
+
+        # BIGSERIAL insert — needs USAGE on field_corrections_id_seq.
+        correction_id = await session.scalar(
+            text(
+                "INSERT INTO field_corrections "
+                "(org_id, annotation_id, field_key, old_value, new_value, action) "
+                "VALUES (:org, :ann, 'total_amount', '100.00', '110.00', 'edit') "
+                "RETURNING id"
+            ),
+            {"org": org_a.org_id, "ann": org_a.annotation_id},
+        )
+        assert correction_id is not None
+
+    # Re-open a fresh transaction to prove the writes committed and are visible
+    # to the same tenant.
+    async with session_scope(org_a.org_id) as session:
+        name_ar = await session.scalar(
+            text("SELECT name_ar FROM vendors WHERE id = :id"), {"id": vendor_id}
+        )
+        assert name_ar == "أكمي الصناعية"
+
+        corrections = await session.scalar(
+            text("SELECT count(*) FROM field_corrections WHERE org_id = :org"),
+            {"org": org_a.org_id},
+        )
+        assert corrections == 1
+
+    # Cleanup runs as the connecting role, which bypasses RLS.
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        await session.execute(text("DELETE FROM vendors WHERE id = :id"), {"id": vendor_id})
+        await session.execute(
+            text("DELETE FROM field_corrections WHERE id = :id"), {"id": correction_id}
+        )
+
+
+async def test_migration_path_does_not_inherit_the_app_role() -> None:
+    """Alembic builds its own engine and must keep the owner role.
+
+    Migrations need DDL rights that ``authenticated`` does not have. If the role
+    switch ever leaked into the raw engine path — by being moved into
+    ``make_engine`` or a connect event — every migration would start failing on
+    CREATE TABLE. This asserts the two paths stay separate.
+    """
+    engine = get_engine()
+    async with engine.connect() as conn:
+        engine_role = await conn.scalar(text("SELECT current_user"))
+        can_create = await conn.scalar(
+            text("SELECT has_schema_privilege(current_user, 'public', 'CREATE')")
+        )
+
+    assert engine_role != NON_BYPASSING_ROLE, (
+        "the raw engine path is running as the application role — migrations will fail"
+    )
+    assert can_create is True, f"{engine_role} cannot CREATE in public; migrations will fail"
+
+
+async def test_app_session_cannot_write_into_another_org(
+    tenants: tuple[Tenant, Tenant],
+) -> None:
+    """WITH CHECK must reject a forged org_id on the app path too."""
+    org_a, org_b = tenants
+
+    with pytest.raises(Exception) as exc_info:
+        async with session_scope(org_a.org_id) as session:
+            await session.execute(
+                text(
+                    "INSERT INTO vendors (org_id, trn, name_en) "
+                    "VALUES (:org, '311111111110003', 'forged')"
+                ),
+                {"org": org_b.org_id},
+            )
+    assert "policy" in str(exc_info.value).lower()
 
 
 # --------------------------------------------------------------------------- #

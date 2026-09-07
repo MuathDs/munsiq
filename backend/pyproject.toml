@@ -26,7 +26,11 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
-    "mypy>=1.11",
+    # Pinned <2 for the same reason as lxml: the WDAC code-integrity policy on
+    # this machine refuses to load mypy 2.x's unsigned compiled extension
+    # ("DLL load failed while importing mypy", CodeIntegrity event 3077).
+    # 1.18.2 loads. Re-test the import before widening this pin.
+    "mypy>=1.11,<2",
     "lxml-stubs>=0.5",  # lxml ships no inline types; mypy --strict needs these
 ]
 

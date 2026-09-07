@@ -18,15 +18,26 @@ Consequently:
   and tests — callers that already hold a trusted org_id. It is deliberately
   not wired to FastAPI's dependency system.
 
-A second caveat specific to this deployment: the application connects to
-Supabase as ``postgres``, which carries BYPASSRLS. RLS policies do not constrain
-that role, so the GUC below is necessary but NOT sufficient today. See
-docs/db.md — the mitigation is FORCE ROW LEVEL SECURITY plus a dedicated
-non-bypassing role, the latter of which is still deferred.
+The application connects to Supabase as ``postgres``, which carries BYPASSRLS.
+A BYPASSRLS role is not constrained by RLS at all — not even with FORCE ROW
+LEVEL SECURITY — so setting the GUC alone would leave the app's own path
+*adjacent* to RLS rather than subject to it.
+
+``session_scope`` therefore also issues ``SET LOCAL ROLE`` to
+``settings.DB_APP_ROLE`` (default ``authenticated``, a role Supabase already
+provisions with neither superuser nor BYPASSRLS). Both statements are
+transaction-local, so the elevated connection role is restored on commit or
+rollback and cannot leak to the next checkout from the pool.
+
+Alembic deliberately does NOT go through here — alembic/env.py builds its own
+engine from app.db.base.make_engine, so migrations keep the owner role they need
+to create and alter objects. Do not "helpfully" route migrations through
+session_scope; DDL as ``authenticated`` will fail.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -34,9 +45,30 @@ from contextlib import asynccontextmanager
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db.base import get_sessionmaker
 
 ORG_GUC = "app.current_org_id"
+
+# Role names are identifiers and cannot be parameterized, so they are validated
+# against this pattern before interpolation. The value comes from settings, not
+# from a request, but an injectable identifier is not a risk worth carrying.
+_SAFE_ROLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+async def _set_app_role(session: AsyncSession) -> None:
+    """Drop from the connection role to the RLS-constrained application role.
+
+    SET LOCAL scopes this to the transaction. An empty DB_APP_ROLE disables the
+    switch, which is the escape hatch if the deployment already connects as a
+    non-bypassing role and has no need to downgrade further.
+    """
+    role = get_settings().DB_APP_ROLE.strip()
+    if not role:
+        return
+    if not _SAFE_ROLE.match(role):
+        raise ValueError(f"DB_APP_ROLE is not a valid SQL identifier: {role!r}")
+    await session.execute(text(f"SET LOCAL ROLE {role}"))
 
 
 async def _set_org_guc(session: AsyncSession, org_id: uuid.UUID) -> None:
@@ -55,9 +87,16 @@ async def _set_org_guc(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 @asynccontextmanager
 async def session_scope(org_id: uuid.UUID) -> AsyncIterator[AsyncSession]:
-    """Open a transaction with the RLS GUC set for ``org_id``."""
+    """Open a transaction bound to ``org_id`` AND constrained by RLS.
+
+    Order matters only in that both must happen before any query: the role
+    switch makes RLS apply, the GUC tells the policies which tenant this is.
+    Setting the GUC first would be equally correct; doing the role first means
+    no statement in this transaction ever runs unconstrained.
+    """
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session, session.begin():
+        await _set_app_role(session)
         await _set_org_guc(session, org_id)
         yield session
 

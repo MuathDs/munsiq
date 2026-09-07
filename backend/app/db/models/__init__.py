@@ -19,9 +19,9 @@ __all__ = [
     "Document",
     "DocumentPart",
     "EvalSet",
+    "Export",
     "ExtractedField",
     "ExtractionSchema",
-    "Export",
     "FieldCorrection",
     "GroundTruthField",
     "Membership",
@@ -41,6 +41,4 @@ def org_scoped_tables() -> list[str]:
     Single source of truth for the RLS migration and the RLS drift test, so the
     two cannot disagree. A new org-scoped model is picked up automatically.
     """
-    return sorted(
-        name for name, table in Base.metadata.tables.items() if "org_id" in table.c
-    )
+    return sorted(name for name, table in Base.metadata.tables.items() if "org_id" in table.c)
