@@ -53,12 +53,41 @@ class Settings(BaseSettings):
 
     # OpenAI-compatible inference endpoint. Ollama locally; the client is written
     # against the OpenAI wire format so the endpoint can be swapped without code
-    # changes. Unused in Phase 1 — declared now so no module invents its own
-    # constant later (see CLAUDE.md, "Deprecated paths").
+    # changes. Never hardcode a model URL anywhere else — see CLAUDE.md.
     INFERENCE_BASE_URL: str = "http://localhost:11434/v1"
-    INFERENCE_MODEL: str = "munsiq-extractor"
+
+    # A general instruct model, NOT the munsiq-extractor fine-tune. That model
+    # has a fixed 5-column schema baked into its weights, which is precisely the
+    # approach this phase replaces: the field list is passed in the prompt at
+    # runtime, read from extraction_schemas.definition. Pointing this at
+    # munsiq-extractor would defeat the whole design.
+    INFERENCE_MODEL: str = "qwen2.5:7b-instruct"
+    INFERENCE_TIMEOUT_S: float = 180.0
+    INFERENCE_MAX_RETRIES: int = 2
+
+    # Vision path is opt-in. A VL model does not fit comfortably in 4GB, so the
+    # default sends OCR/text-layer text only.
+    EXTRACTION_USE_VISION: bool = False
 
     MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
+
+    # ----------------------------------------------------------------- #
+    # Storage — local filesystem. The Storage protocol keeps S3 swappable,
+    # but the S3 implementation is deliberately not built in this phase.
+    # ----------------------------------------------------------------- #
+    STORAGE_DIR: str = "var/storage"
+    MAX_PAGES: int = 50
+    RASTER_DPI: int = 150
+    WEBP_QUALITY: int = 85
+
+    # ----------------------------------------------------------------- #
+    # Text extraction
+    # ----------------------------------------------------------------- #
+    # OCR runs ONLY on pages with no embedded text layer. "rapidocr" | "none".
+    OCR_ENGINE: str = "rapidocr"
+
+    # rapidfuzz score below which an extracted value counts as ungrounded.
+    GROUNDING_THRESHOLD: int = 85
 
     @property
     def async_database_url(self) -> str:

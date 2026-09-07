@@ -95,3 +95,8 @@ samples/*.xml
 .env.local
 *.env
 !.env.example
+
+# Local object storage — uploaded invoices with live TRNs and IBANs.
+# Never commit; see docs/ingestion.md.
+backend/var/
+var/storage/

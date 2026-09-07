@@ -12,6 +12,7 @@ import base64
 from io import BytesIO
 from typing import Final
 
+import pymupdf
 from pypdf import PdfWriter
 
 # --------------------------------------------------------------------------- #
@@ -221,4 +222,32 @@ def build_pdf_with_non_xml_attachment() -> bytes:
     writer.add_attachment("terms.txt", b"Payment due within 30 days.")
     buffer = BytesIO()
     writer.write(buffer)
+    return buffer.getvalue()
+
+
+def build_pdf_with_text_layer(
+    lines: tuple[str, ...] = (
+        "TAX INVOICE",
+        "Invoice No: SA-2026-0334",
+        "Seller: Al Jazeera Industrial Maintenance",
+        "VAT No: 310122393510003",
+        "Subtotal: 45320.00",
+        "VAT 15%: 6798.00",
+        "Total: 52118.00 SAR",
+    ),
+    font_path: str = r"C:\Windows\Fonts\arial.ttf",
+) -> bytes:
+    """A digital PDF with a real text layer — the common ZATCA-era case.
+
+    No attachment, so Step Zero finds nothing and the model path runs.
+    """
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    y = 100
+    for line in lines:
+        page.insert_text((72, y), line, fontsize=12, fontfile=font_path, fontname="F0")
+        y += 26
+    buffer = BytesIO()
+    doc.save(buffer)
+    doc.close()
     return buffer.getvalue()

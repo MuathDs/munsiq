@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Aliased: a bare `annotations` import would shadow `from __future__ import
 # annotations` above, which mypy flags and which would confuse any reader.
 from app.api import annotations as annotations_api
-from app.api import documents, health
+from app.api import documents, health, uploads
 from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router, prefix=settings.API_V1_PREFIX)
     app.include_router(annotations_api.router, prefix=settings.API_V1_PREFIX)
+    app.include_router(uploads.router, prefix=settings.API_V1_PREFIX)
 
     if settings.DEBUG_ENDPOINTS:
         # Registered conditionally: /documents/probe accepts unauthenticated

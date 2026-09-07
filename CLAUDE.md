@@ -44,6 +44,26 @@ two lines now, no migration later.
   HARD RULE: Alembic must never inherit the role switch — `authenticated`
   cannot run DDL. `alembic/env.py` builds its own engine on purpose.
 
+- **Durable job queue (arq + Redis).** Deferred: no Docker on this machine, so
+  no Redis. `POST /documents` returns 202 and runs the pipeline in a FastAPI
+  BackgroundTask instead.
+
+  The trade-off, stated plainly: **no retries and no durability across a
+  restart.** If the process dies mid-document, that document stays unprocessed
+  and nothing retries it. There is also no backpressure — concurrent uploads all
+  run in-process.
+
+  `process_document(org_id, document_id)` is a plain coroutine, so moving to arq
+  is a call-site change rather than a rewrite. Revisit before anything resembling
+  real volume.
+
+- **Arabic OCR for image-only pages.** The OCR engine that loads under this
+  machine's WDAC policy (RapidOCR) has zero Arabic characters in its recogniser,
+  so image-only Arabic scans cannot be read. This is NOT silent: the page row
+  records `text_source='ocr_unsupported_script'` and a validation_results row is
+  written. Digital PDFs with a text layer — the common ZATCA case — are
+  unaffected and handled exactly. See docs/ingestion.md to close it.
+
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.
 - NEVER read tenant identity from a request body or query param. Only from the verified JWT.

@@ -66,6 +66,11 @@ class Page(Base, OrgScopedMixin):
     width_px: Mapped[int | None] = mapped_column(Integer)
     height_px: Mapped[int | None] = mapped_column(Integer)
     ocr_text: Mapped[str | None] = mapped_column(Text)
+    # How this page's text was obtained: 'text_layer' | 'ocr' |
+    # 'ocr_unsupported_script' | 'ocr_unavailable' | 'empty'.
+    # The degraded values exist so a page that yielded NO usable text is
+    # recorded as such instead of being indistinguishable from a blank page.
+    text_source: Mapped[str | None] = mapped_column(Text)
 
 
 class DocumentPart(Base, OrgScopedMixin):
