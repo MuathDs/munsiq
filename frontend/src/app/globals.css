@@ -3,6 +3,9 @@
 @theme inline {
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
+  /* IBM Plex Sans Arabic. Applied via `dir="rtl"` in [locale]/layout.tsx, so
+     Arabic never falls back to a Latin face with synthesised glyphs. */
+  --font-arabic: var(--font-plex-arabic);
 
   /* Design tokens from the Munsiq enterprise cloud dashboard handoff.
      This is a single permanently-dark surface, not a light/dark toggle,
@@ -21,9 +24,51 @@
   --color-success: oklch(0.72 0.15 155);
   --color-warning: oklch(0.75 0.15 80);
   --color-avatar: oklch(0.3 0.01 258);
+
+  /* Added for the validation workspace. The handoff palette had no error
+     colour because the dashboard never needed to block anything; the three
+     provenance states do. Same oklch family, matched chroma and lightness to
+     --color-success and --color-warning so the trio reads as one system. */
+  --color-danger: oklch(0.66 0.19 22);
+  --color-danger-soft: oklch(0.66 0.19 22 / 15%);
+  --color-success-soft: oklch(0.72 0.15 155 / 15%);
+  --color-warning-soft: oklch(0.75 0.15 80 / 15%);
 }
 
 body {
   background: var(--color-bg);
   color: var(--color-ink);
+}
+
+/* Arabic gets its own face. Latin numerals inside Arabic text stay legible
+   because IBM Plex Sans Arabic ships matching Latin glyphs. */
+[dir="rtl"] {
+  font-family: var(--font-arabic), var(--font-sans), system-ui, sans-serif;
+}
+
+/* Every amount, VAT number and confidence figure lines up column to column. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The splitter drag must not select the panes' text. */
+.dragging,
+.dragging * {
+  user-select: none;
+  cursor: col-resize !important;
+}
+
+/* Visible focus, always. Reviewers work this page from the keyboard. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

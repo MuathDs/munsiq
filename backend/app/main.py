@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # annotations` above, which mypy flags and which would confuse any reader.
 from app.api import annotations as annotations_api
 from app.api import documents, health, pages, uploads
+from app.api.deps import get_app_settings
 from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings: Injected for tests, which need to flip DEBUG_ENDPOINTS without
             mutating the process-wide singleton.
     """
+    injected = settings is not None
     settings = settings or get_settings()
 
     app = FastAPI(
@@ -71,6 +73,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # uploads. See app/api/documents.py for the full warning.
         logger.warning("debug_endpoints_enabled", extra={"routes": ["/documents/probe"]})
         app.include_router(documents.router, prefix=settings.API_V1_PREFIX)
+
+    if injected:
+        # Make the injected Settings govern the dependency graph as well, not
+        # just routing. Without this a test could enable a flag and watch the
+        # dependencies underneath keep reading the process-wide singleton.
+        app.dependency_overrides[get_app_settings] = lambda: settings
 
     return app
 

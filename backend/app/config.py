@@ -102,6 +102,20 @@ class Settings(BaseSettings):
     # session, so a long life turns a leaked URL into a standing grant.
     PAGE_URL_TTL_S: int = 300
 
+    # ----------------------------------------------------------------- #
+    # Trusted BFF — a scaffold for deferred authentication
+    # ----------------------------------------------------------------- #
+    # Real auth (JWT) is deferred. Until it lands, the Next.js BFF holds the
+    # org identity server-side and asserts it to this API. Accepting such an
+    # assertion is only safe when the caller proves it is the BFF, so BOTH of
+    # these must be set: the flag opts in, the secret authenticates.
+    #
+    # Off by default, and the secret has no default. With either unset,
+    # get_current_org_id raises 501 exactly as before — a browser can never
+    # choose its own tenant. See app/api/deps.py.
+    TRUSTED_BFF_ENABLED: bool = False
+    TRUSTED_BFF_SECRET: str = ""
+
     @property
     def async_database_url(self) -> str:
         """DATABASE_URL forced onto the asyncpg driver.

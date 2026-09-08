@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# The template is documentation, not a secret — it must be tracked.
+!.env.local.example
