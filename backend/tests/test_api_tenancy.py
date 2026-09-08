@@ -123,18 +123,26 @@ async def test_list_endpoint_returns_only_callers_tenant(
 async def test_fetch_by_id_cannot_reach_another_tenant(
     api_tenants: tuple[ApiTenant, ApiTenant],
 ) -> None:
-    """Knowing tenant B's UUID must not be enough. The endpoint does not filter."""
+    """Knowing tenant B's UUID must not be enough. The endpoint does not filter.
+
+    Another tenant's id returns 404, not an empty 200. That is deliberate: 404
+    is indistinguishable from "no such annotation anywhere", so a caller cannot
+    use the response to probe which ids exist in other tenants.
+    """
     org_a, org_b = api_tenants
 
     async with client_as(org_a.org_id) as client:
         own = await client.get(f"/api/v1/annotations/{org_a.annotation_id}")
         other = await client.get(f"/api/v1/annotations/{org_b.annotation_id}")
+        absent = await client.get(f"/api/v1/annotations/{uuid.uuid4()}")
 
     assert own.status_code == 200
-    assert own.json()["id"] == str(org_a.annotation_id)
+    assert own.json()["annotation_id"] == str(org_a.annotation_id)
 
-    assert other.status_code == 200
-    assert other.json() is None, "tenant A fetched tenant B's annotation by primary key over HTTP"
+    assert other.status_code == 404, "tenant A reached tenant B's annotation by primary key"
+    # Existence must not be leakable: a foreign id and a nonexistent id look
+    # identical from outside.
+    assert other.status_code == absent.status_code
 
 
 async def test_both_tenants_see_their_own_row(

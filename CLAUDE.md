@@ -64,6 +64,28 @@ two lines now, no migration later.
   written. Digital PDFs with a text layer — the common ZATCA case — are
   unaffected and handled exactly. See docs/ingestion.md to close it.
 
+- **Real authentication (JWT).** Deferred. `get_current_org_id` in
+  `app/api/deps.py` raises 501 rather than guessing, and never falls back to a
+  header or query parameter — that value feeds the RLS GUC directly, so a
+  caller-supplied one would let anyone pick a tenant.
+
+  Until JWT lands, the frontend reaches the API through a **BFF layer**: Next.js
+  route handlers and server components hold the org identity server-side and
+  call FastAPI. The browser never sends a tenant id. This is a portfolio-scope
+  decision — it keeps the hard rule intact without building an auth system.
+
+  Replacing it is small and local: `get_current_org_id` starts verifying a
+  bearer token and returning its org claim. Nothing downstream changes — not the
+  session dependency, not the role switch, not a single policy. The BFF can then
+  either forward the user's token or be removed entirely.
+
+  EXCEPTION, by necessity: `GET /pages/image` is not behind the session
+  dependency. An `<img src>` cannot carry a token, so that route authorizes
+  itself with a short-lived HMAC signature covering tenant, document and page —
+  the local-storage stand-in for an S3 presigned URL. The tenant there is
+  *verified* against a signature only the server can produce, never *read* from
+  the request. See `app/services/signed_urls.py`.
+
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.
 - NEVER read tenant identity from a request body or query param. Only from the verified JWT.

@@ -78,9 +78,17 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
     sides, so Arabic-Indic digits, thousands separators and invisible format
     characters do not cause false alarms.
 
-    Values that came from the signed UBL are exempt: they were read from an
-    attachment, not from the rendered page, and a compliant invoice can carry a
-    value in its XML that is not printed on its face.
+    TWO EXEMPTIONS, both load-bearing:
+
+    * **UBL values.** They were read from a signed attachment, not the rendered
+      page, and a compliant invoice can carry a value in its XML that is not
+      printed on its face.
+    * **Human corrections.** This rule exists because *models* fabricate. A
+      reviewer is looking at the document and has authority the model does not —
+      including the authority to fix a value that OCR misread, which by
+      definition will not appear in the OCR text. Applying the guard to human
+      input would make a bad OCR read permanently unfixable: every correction
+      would re-trigger the blocker it was meant to clear.
     """
     if not ctx.page_text.strip():
         # No text was extracted at all — the page-level failure is already
@@ -94,7 +102,7 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
     checked = 0
     for key in sorted(ctx.numeric_keys):
         entry = ctx.fields.get(key)
-        if entry is None or entry.value is None or entry.from_ubl:
+        if entry is None or entry.value is None or entry.from_ubl or entry.from_human:
             continue
         needle = normalize_for_match(entry.value)
         if not needle:

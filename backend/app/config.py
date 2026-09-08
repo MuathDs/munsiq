@@ -89,6 +89,19 @@ class Settings(BaseSettings):
     # rapidfuzz score below which an extracted value counts as ungrounded.
     GROUNDING_THRESHOLD: int = 85
 
+    # ----------------------------------------------------------------- #
+    # Signed page-image URLs
+    # ----------------------------------------------------------------- #
+    # HMAC key for page-image tokens. MUST be set outside local development:
+    # an empty key would make every page image readable across tenants. Local
+    # dev generates a random per-process key instead of defaulting to anything
+    # guessable. See app/services/signed_urls.py.
+    IMAGE_URL_SECRET: str = ""
+
+    # Page-image URLs expire fast. They authorize by signature rather than by
+    # session, so a long life turns a leaked URL into a standing grant.
+    PAGE_URL_TTL_S: int = 300
+
     @property
     def async_database_url(self) -> str:
         """DATABASE_URL forced onto the asyncpg driver.

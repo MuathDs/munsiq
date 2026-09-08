@@ -49,9 +49,7 @@ async def annotation() -> AsyncIterator[Fixture]:
             {"i": fx.org_id, "n": f"Confirm Test {fx.org_id}"},
         )
         await session.execute(
-            sql(
-                "INSERT INTO documents (id, org_id, source) VALUES (:i, :o, 'upload')"
-            ),
+            sql("INSERT INTO documents (id, org_id, source) VALUES (:i, :o, 'upload')"),
             {"i": fx.document_id, "o": fx.org_id},
         )
         await session.execute(
@@ -72,9 +70,7 @@ async def annotation() -> AsyncIterator[Fixture]:
         yield fx
     finally:
         async with sessionmaker() as session, session.begin():
-            await session.execute(
-                sql("DELETE FROM organizations WHERE id = :i"), {"i": fx.org_id}
-            )
+            await session.execute(sql("DELETE FROM organizations WHERE id = :i"), {"i": fx.org_id})
 
 
 async def add_finding(
@@ -125,9 +121,7 @@ async def test_confirm_is_refused_while_a_blocking_error_remains(
     )
 
     async with client_as(annotation.org_id) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert response.status_code == 409, response.text
     assert await status_of(annotation) == "to_review", "status changed despite refusal"
@@ -142,9 +136,7 @@ async def test_refusal_names_the_rule_and_carries_both_languages(
     )
 
     async with client_as(annotation.org_id) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     payload = response.json()["detail"]
     blockers = payload["blockers"]
@@ -166,9 +158,7 @@ async def test_every_unresolved_blocker_is_reported_not_just_the_first(
     await add_finding(annotation, "VAT_CALC_MISMATCH", "error", passed=False)
 
     async with client_as(annotation.org_id) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     codes = {b["rule_code"] for b in response.json()["detail"]["blockers"]}
     assert codes == {"GRAND_TOTAL_MISMATCH", "TRN_CHECKSUM", "VAT_CALC_MISMATCH"}
@@ -179,9 +169,7 @@ async def test_every_unresolved_blocker_is_reported_not_just_the_first(
 # --------------------------------------------------------------------------- #
 async def test_clean_annotation_confirms(annotation: Fixture) -> None:
     async with client_as(annotation.org_id) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "confirmed"
@@ -195,9 +183,7 @@ async def test_warnings_do_not_block(annotation: Fixture) -> None:
     await add_finding(annotation, "LINE_ITEM_PRICE_MISMATCH", "warning", passed=False)
 
     async with client_as(annotation.org_id) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert response.status_code == 200, response.text
     assert await status_of(annotation) == "confirmed"
@@ -212,9 +198,7 @@ async def test_passing_error_severity_rules_do_not_block(annotation: Fixture) ->
     await add_finding(annotation, "TRN_CHECKSUM", "error", passed=True)
 
     async with client_as(annotation.org_id) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert response.status_code == 200, response.text
 
@@ -226,9 +210,7 @@ async def test_resolving_the_finding_unblocks_confirmation(
     await add_finding(annotation, "GRAND_TOTAL_MISMATCH", "error", passed=False)
 
     async with client_as(annotation.org_id) as client:
-        first = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        first = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
         assert first.status_code == 409
 
         async with get_sessionmaker()() as session, session.begin():
@@ -240,9 +222,7 @@ async def test_resolving_the_finding_unblocks_confirmation(
                 {"a": annotation.annotation_id},
             )
 
-        second = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        second = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert second.status_code == 200, second.text
     assert await status_of(annotation) == "confirmed"
@@ -253,12 +233,8 @@ async def test_resolving_the_finding_unblocks_confirmation(
 # --------------------------------------------------------------------------- #
 async def test_confirming_twice_is_idempotent(annotation: Fixture) -> None:
     async with client_as(annotation.org_id) as client:
-        first = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
-        second = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        first = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
+        second = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -274,9 +250,7 @@ async def test_unknown_annotation_is_404(annotation: Fixture) -> None:
 async def test_another_tenants_annotation_is_invisible(annotation: Fixture) -> None:
     """RLS still governs this endpoint: a foreign id must 404, not 409 or 200."""
     async with client_as(uuid.uuid4()) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert response.status_code == 404
     assert await status_of(annotation) == "to_review", "another tenant confirmed our annotation"
@@ -290,9 +264,7 @@ async def test_failed_annotation_cannot_be_confirmed(annotation: Fixture) -> Non
         )
 
     async with client_as(annotation.org_id) as client:
-        response = await client.post(
-            f"/api/v1/annotations/{annotation.annotation_id}/confirm"
-        )
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     assert response.status_code == 409
     assert await status_of(annotation) == "failed"

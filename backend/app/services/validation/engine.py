@@ -79,6 +79,17 @@ class FieldView:
     def from_ubl(self) -> bool:
         return self.source == "ubl_xml"
 
+    @property
+    def from_human(self) -> bool:
+        """A reviewer chose this value.
+
+        Matters for the anti-hallucination guard: that rule exists because
+        *models* fabricate. A reviewer is looking at the rendered page and has
+        authority the model does not — including the authority to correct a
+        value that OCR misread, which by definition will not match the OCR text.
+        """
+        return self.source == "human"
+
 
 @dataclass(frozen=True)
 class LineItem:

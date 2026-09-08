@@ -772,3 +772,35 @@ def test_duplicate_rule_code_is_rejected_at_import_time() -> None:
         @rule_decorator("TRN_CHECKSUM", Severity.ERROR, message_ar="مكرر", message_en="duplicate")
         def _clash(_ctx: ValidationContext) -> list[RuleResult] | None:  # pragma: no cover
             return None
+
+
+def test_human_corrections_are_exempt_from_the_ocr_guard() -> None:
+    """A reviewer must be able to fix a value OCR misread.
+
+    OCR_SUBSTRING_MISSING exists because MODELS fabricate. A reviewer is looking
+    at the rendered page and has authority the model does not — including the
+    authority to correct a value the OCR got wrong, which by definition will not
+    appear in the OCR text.
+
+    Without this exemption a bad OCR read is permanently unfixable: every
+    correction re-triggers the very blocker it was meant to clear, and confirm
+    refuses forever.
+    """
+    ctx = ValidationContext(
+        fields={"total_amount": FieldView(key="total_amount", value="51750.00", source="human")},
+        numeric_keys=frozenset({"total_amount"}),
+        page_text="the page says 99999.00 because OCR misread it",
+    )
+    assert numeric_values_appear_on_the_page(ctx) is None
+
+
+def test_a_model_value_absent_from_the_page_still_fails() -> None:
+    """The exemption is for humans only — the guard still bites on model output."""
+    ctx = ValidationContext(
+        fields={"total_amount": FieldView(key="total_amount", value="51750.00", source="vlm")},
+        numeric_keys=frozenset({"total_amount"}),
+        page_text="the page says 99999.00",
+    )
+    findings = numeric_values_appear_on_the_page(ctx)
+    assert findings
+    assert findings[0].code == "OCR_SUBSTRING_MISSING"
