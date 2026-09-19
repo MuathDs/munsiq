@@ -57,6 +57,10 @@ follow direction.
 
 `http://localhost:3000/en/annotations/<B>`
 
+> The compliant path below was verified end to end. Document B's findings
+> come from a live model run, so the exact badge confidences vary between
+> runs; `GRAND_TOTAL_MISMATCH` is the blocker the invoice is built to raise.
+
 Different story, visible immediately:
 
 * **Signed XML · no AI** is gone — this one says **AI · qwen2.5:7b-instruct**.
