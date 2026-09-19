@@ -29,10 +29,25 @@ export interface ExtractedField {
   row_index: number | null;
   value_extracted: string | null;
   value_final: string | null;
-  confidence: number | null;
+  /**
+   * Arrives as a JSON string: the backend serializes Decimal as text so no
+   * precision is lost in transit. Parse before doing arithmetic with it.
+   */
+  confidence: number | string | null;
   source: FieldSource | null;
   validation_state: ValidationState | string | null;
   bbox: BBox | null;
+}
+
+/** One requested field, as the queue's extraction schema defines it. */
+export interface SchemaField {
+  key: string;
+  label_en: string;
+  label_ar: string;
+  type: string;
+  required: boolean;
+  /** True for a cell of the repeating line-item group. */
+  line_item?: boolean;
 }
 
 export interface ValidationFinding {
@@ -64,6 +79,8 @@ export interface AnnotationDetail {
   has_embedded_ubl: boolean;
   page_count: number | null;
   blockers: string[];
+  /** Labels (ar/en), types and order, read from the extraction schema. */
+  schema_fields?: SchemaField[];
   fields: ExtractedField[];
   findings: ValidationFinding[];
   pages: PageInfo[];

@@ -1,7 +1,10 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-inter);
+  /* Plex Arabic as the fallback, so an Arabic value inside the English UI (a
+     seller name read from the XML, say) gets a designed Arabic face instead of
+     whatever the OS substitutes. */
+  --font-sans: var(--font-inter), var(--font-plex-arabic);
   --font-mono: var(--font-jetbrains-mono);
   /* IBM Plex Sans Arabic. Applied via `dir="rtl"` in [locale]/layout.tsx, so
      Arabic never falls back to a Latin face with synthesised glyphs. */
@@ -49,6 +52,21 @@ body {
 /* Every amount, VAT number and confidence figure lines up column to column. */
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* The document pane's backdrop: one step darker than the page, with a faint
+   dot grid so the white invoice reads as an object on a surface rather than a
+   rectangle floating in a void. Both colours are existing tokens. */
+.doc-canvas {
+  background-color: var(--color-sidebar);
+  background-image: radial-gradient(var(--color-line-strong) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* A thin scrollbar that belongs to the dark surface instead of the OS default. */
+.pane-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
 }
 
 /* The splitter drag must not select the panes' text. */
