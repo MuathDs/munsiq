@@ -21,11 +21,24 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SCHEMA_VERSION: Literal["munsiq.invoice.v1"] = "munsiq.invoice.v1"
 
 ExportFormat = Literal["json", "xlsx", "csv"]
+
+
+BBOX_PRECISION = 6
+"""Decimal places kept on a bounding box coordinate.
+
+Two reasons, and neither is taste. Grounding is a fuzzy match against page text,
+so a coordinate is not meaningful to 17 significant digits — at 1e-6 of a page
+width this is already far below a printer dot. And XLSX serializes floats with
+``%.16g``, so a 17-digit coordinate comes back from a spreadsheet differing in
+its last digit: the formats would disagree while carrying "the same" value.
+Stating the precision once, in the contract, is better than three formats
+quietly rounding differently.
+"""
 
 
 class ExportBBox(BaseModel):
@@ -38,6 +51,11 @@ class ExportBBox(BaseModel):
     y0: float
     x1: float
     y1: float
+
+    @field_validator("x0", "y0", "x1", "y1")
+    @classmethod
+    def _round(cls, value: float) -> float:
+        return round(value, BBOX_PRECISION)
 
 
 class ExportField(BaseModel):

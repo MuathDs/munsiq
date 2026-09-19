@@ -147,6 +147,28 @@ def test_csv_and_xlsx_carry_exactly_what_json_carries() -> None:
     assert parse_xlsx(render_xlsx(invoice)) == expected
 
 
+def test_bbox_precision_is_stated_not_accidental() -> None:
+    """XLSX writes floats as %.16g, so the contract fixes the precision itself.
+
+    Without this the three formats disagree in the 17th digit on real grounding
+    output — the same value, rendered differently, which is exactly what one
+    contract exists to prevent.
+    """
+    invoice = sample()
+    invoice.invoice[0].bbox = ExportBBox(
+        page=1,
+        x0=0.22741514574579832,
+        y0=0.13674584250552071,
+        x1=0.35741848985688024,
+        y1=0.1526508285993635,
+    )
+    assert invoice.invoice[0].bbox.x0 == 0.227415
+
+    expected = expected_rows(render_json(invoice))
+    assert parse_xlsx(render_xlsx(invoice)) == expected
+    assert parse_csv(render_csv(invoice)) == expected
+
+
 def test_money_and_confidence_are_never_floats() -> None:
     workbook = load_workbook(io.BytesIO(render_xlsx(sample())))
     sheet = workbook[INVOICE_SHEET]

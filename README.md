@@ -97,35 +97,46 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **266 passed, 1 skipped, 1 xfailed — 14m13s** | full `pytest` run against Supabase Postgres 17, 2026-09-11 |
+| Backend test suite | **291 passed, 1 skipped, 1 xfailed — 18m14s** | full `pytest` run against Supabase Postgres 17, 2026-09-19 |
 | Validation rules | **14** (10 blocking, 4 advisory) | `@rule` decorators across `app/services/validation/rules/` |
 | Validation coverage | **100% statements and branches** — 445 statements, 148 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 97 tests in 21.9s |
-| Export renderers | **17 tests, 1.6s**, no database | `tests/test_export_render.py` |
-| Step Zero, compliant invoice | **0 model calls**; 9 of 11 header fields grounded on the page | seeded demo invoice, 2026-09-11 |
-| Model path, same schema | `qwen2.5:7b-instruct` via Ollama; 8 of 11 fields grounded | seeded demo invoice, 2026-09-11 |
+| Export renderers | **18 tests, 2.3s**, no database | `tests/test_export_render.py` |
+| Document A, compliant | **0 model calls**; 19 fields (11 header + 8 line-item cells); 9/11 header and 5/8 line cells grounded; no blockers; 29.8s end to end | `scripts/seed_demo_documents.py`, 2026-09-19 |
+| Document B, model path | `qwen2.5:7b-instruct` via Ollama; **11/11 fields grounded**; confidences 0.857–1.000; 1 blocker (`GRAND_TOTAL_MISMATCH`); model 164.9s, pipeline 181.0s | same run, CPU inference |
 | Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies` |
 
-The two ungrounded fields on the compliant invoice are honest gaps, not
-failures: the seller's legal name is Arabic in the XML while the page prints the
-English name, and the purchase-order number is not on that invoice at all. Both
-get no bounding box rather than a wrong one.
+The ungrounded values on document A are honest gaps, not failures. The seller's
+legal name is Arabic in the XML while the page prints the English trading name;
+the second line's description is Arabic on the same English page; the
+purchase-order number is not on that invoice at all; and the two line
+quantities ("2", "4") are too short to locate safely — a box on the wrong "2"
+is worse than no box. Each gets no bounding box rather than a wrong one, and
+keeps its authority either way: the XML is what was signed, not the page.
 
 ## The review workspace
 
 Bilingual, RTL-correct, dark. Provenance is the centrepiece.
 
-**Compliant invoice — every value from the signed XML (English):**
+**Document A — `ZATCA 4/4`, `Signed XML · no AI`, 18 of 19 values read straight
+from the signed attachment:**
 
 ![Validation workspace, compliant invoice, English](docs/screenshots/workspace-compliant-en.png)
 
-**The same document in Arabic — the whole layout mirrors, the page does not:**
+**The same document in Arabic. The layout mirrors, the labels come from the
+schema, and the page image deliberately does not mirror:**
 
 ![Validation workspace, compliant invoice, Arabic](docs/screenshots/workspace-compliant-ar.png)
 
-**A document that does not add up — the blocker is the primary element, the
-field is pinned to the top, and Confirm is refused:**
+**Document B — no attachment, so the model ran: amber badges with confidence
+bars, `ZATCA 1/1` because the other checks had nothing to check, and
+`GRAND_TOTAL_MISMATCH` pinned above everything with Confirm refused:**
 
-![Validation workspace, blocked document](docs/screenshots/workspace-blocked-en.png)
+![Validation workspace, blocked document, English](docs/screenshots/workspace-blocked-en.png)
+
+**And blocked in Arabic — the rule's message is written in both languages, not
+translated at render time:**
+
+![Validation workspace, blocked document, Arabic](docs/screenshots/workspace-blocked-ar.png)
 
 A 90-second click path through it: [`docs/demo.md`](docs/demo.md).
 
