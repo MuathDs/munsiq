@@ -31,6 +31,7 @@ from typing import Any, Final
 from openpyxl import Workbook
 from openpyxl.packaging.custom import StringProperty
 from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +44,7 @@ from app.schemas.export import (
     ExportLineItem,
     MunsiqInvoiceV1,
 )
-from app.schemas.workspace import SchemaFieldOut, bbox_from_json, schema_fields_from_definition
+from app.schemas.workspace import bbox_from_json, schema_fields_from_definition
 from app.services.normalize import has_arabic
 
 Cell = str | int | float | None
@@ -159,7 +160,7 @@ async def load_invoice(
             source=row.source,
             confidence=row.confidence,
             bbox=_bbox(row.bbox),
-            reviewed_by=reviewers[key] if key in reviewers else header.confirmed_by,
+            reviewed_by=reviewers.get(key, header.confirmed_by),
             original_value=row.value_extracted,
         )
 
@@ -277,7 +278,9 @@ def render_csv(invoice: MunsiqInvoiceV1) -> bytes:
     for row in flatten(invoice):
         writer.writerow(
             [
-                "" if row[c] is None else neutralise_csv_cell(str(row[c]))
+                ""
+                if row[c] is None
+                else neutralise_csv_cell(str(row[c]))
                 if isinstance(row[c], str)
                 else str(row[c])
                 for c in COLUMNS
@@ -303,8 +306,10 @@ def render_xlsx(invoice: MunsiqInvoiceV1) -> bytes:
 
     workbook.properties.title = "MunsiqInvoiceV1"
     workbook.properties.identifier = str(invoice.annotation_id)
+    # Not in types-openpyxl's Workbook, but present since openpyxl 3.1.
+    custom_props = workbook.custom_doc_props  # type: ignore[attr-defined]
     for name, value in _metadata(invoice).items():
-        workbook.custom_doc_props.append(StringProperty(name=name, value=value))
+        custom_props.append(StringProperty(name=name, value=value))
 
     buffer = io.BytesIO()
     workbook.save(buffer)
@@ -342,4 +347,4 @@ def _write_sheet(sheet: Worksheet, columns: tuple[str, ...], rows: list[dict[str
     sheet.freeze_panes = "A2"
     for index, column in enumerate(columns, start=1):
         width = 14 if column.startswith("bbox") or column in ("type", "row_index") else 24
-        sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = width
+        sheet.column_dimensions[get_column_letter(index)].width = width

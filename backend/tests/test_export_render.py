@@ -1,12 +1,13 @@
 """MunsiqInvoiceV1 renderers — pure functions, no database.
 
 The contract is the model. These tests pin that CSV and XLSX carry exactly what
-JSON carries, that Arabic survives each format byte for byte, and that
-untrusted invoice text never becomes a spreadsheet formula.
+JSON carries, that Arabic survives every format intact, and that untrusted
+invoice text never becomes a spreadsheet formula.
 """
 
 from __future__ import annotations
 
+import html
 import io
 import json
 import uuid
@@ -176,11 +177,21 @@ def test_arabic_round_trips_through_xlsx() -> None:
     lines = [r for r in rows if r["key"] == "line_description"]
     assert [r["value"] for r in lines] == ["Centrifugal pump", LINE_AR]
 
-    # At the byte level too: UTF-8 in the package, not mojibake or escapes.
+    # Inside the package too. openpyxl writes these cells as inline strings and
+    # escapes non-ASCII as XML numeric character references (&#1585;), which is
+    # valid XML that decodes back to the same characters — so resolve the
+    # references rather than grepping for UTF-8 bytes that are legitimately
+    # not there.
     with zipfile.ZipFile(io.BytesIO(body)) as package:
-        shared = package.read("xl/sharedStrings.xml")
-    assert SELLER_AR.encode("utf-8") in shared
-    assert LINE_AR.encode("utf-8") in shared
+        sheets = [
+            html.unescape(package.read(name).decode("utf-8"))
+            for name in package.namelist()
+            if name.startswith("xl/worksheets/")
+        ]
+    assert any(SELLER_AR in sheet for sheet in sheets)
+    assert any(LINE_AR in sheet for sheet in sheets)
+    # And no mojibake: Arabic decoded through the wrong code page starts "Ø".
+    assert not any("Ø" in sheet for sheet in sheets)
 
     # And it is laid out right to left.
     sheet = load_workbook(io.BytesIO(body))[INVOICE_SHEET]
