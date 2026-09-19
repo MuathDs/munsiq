@@ -49,6 +49,8 @@ class ExtractedValue:
     shadow_value: str | None = None
     """The model's answer for a field that UBL already owns. Kept for comparison,
     never promoted to the field's value."""
+    row_index: int | None = None
+    """None for a header field; the zero-based line number for a line-item cell."""
 
 
 @dataclass

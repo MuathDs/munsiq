@@ -167,8 +167,11 @@ async def test_request_without_identity_is_refused() -> None:
 
     A convenient fallback here — a header, a query param, a "default org" — would
     let the caller choose which tenant to read.
+
+    The BFF path is pinned off: this asserts the posture with NO identity
+    source configured, which a dev .env enabling the BFF would otherwise mask.
     """
-    app = create_app(Settings(DEBUG_ENDPOINTS=False))
+    app = create_app(Settings(DEBUG_ENDPOINTS=False, TRUSTED_BFF_ENABLED=False))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/v1/annotations")
 

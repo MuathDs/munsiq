@@ -31,6 +31,9 @@ def build_context(
     invoice: UBLInvoice | None = None,
 ) -> ValidationContext:
     """Turn what the pipeline produced into what the rules consume."""
+    # Header fields only. Rules address fields by key, so line-item cells —
+    # which share a key across rows — would collide here; line arithmetic is
+    # checked from the parsed UBL lines below instead.
     views = {
         value.field_key: FieldView(
             key=value.field_key,
@@ -39,6 +42,7 @@ def build_context(
             shadow_value=value.shadow_value,
         )
         for value in values
+        if value.row_index is None
     }
 
     numeric_keys = frozenset(

@@ -81,8 +81,60 @@ class PageOut(BaseModel):
     )
 
 
+class SchemaFieldOut(BaseModel):
+    """One requested field, as the queue's extraction schema defines it.
+
+    The workspace renders these labels rather than raw field keys, and orders
+    fields the way the schema does. Both are read from the database at request
+    time — the frontend hardcodes neither.
+    """
+
+    key: str
+    label_en: str = ""
+    label_ar: str = ""
+    type: str = "string"
+    required: bool = False
+    line_item: bool = Field(
+        default=False, description="True for a cell of the repeating line-item group."
+    )
+
+
+def schema_fields_from_definition(definition: Any) -> list[SchemaFieldOut]:
+    """Header fields, then line-item fields, in schema order.
+
+    Tolerant of a malformed definition: a bad entry is skipped rather than
+    failing the whole read, because the workspace and the export must still
+    render the values that ARE there.
+    """
+    if not isinstance(definition, dict):
+        return []
+    out: list[SchemaFieldOut] = []
+    for group, line_item in (("fields", False), ("line_item_fields", True)):
+        specs = definition.get(group)
+        if not isinstance(specs, list):
+            continue
+        for spec in specs:
+            if not isinstance(spec, dict) or "key" not in spec:
+                continue
+            out.append(
+                SchemaFieldOut(
+                    key=str(spec["key"]),
+                    label_en=str(spec.get("label_en", "")),
+                    label_ar=str(spec.get("label_ar", "")),
+                    type=str(spec.get("type", "string")),
+                    required=bool(spec.get("required", False)),
+                    line_item=line_item,
+                )
+            )
+    return out
+
+
 class AnnotationDetail(BaseModel):
     annotation_id: uuid.UUID
+    schema_fields: list[SchemaFieldOut] = Field(
+        default_factory=list,
+        description="Field labels (ar/en), types and order from the extraction schema.",
+    )
     document_id: uuid.UUID
     status: str
     model_version: str | None = None

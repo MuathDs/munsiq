@@ -143,6 +143,34 @@ INVOICE_SCHEMA: dict[str, object] = {
             ),
         },
     ],
+    # A repeating group, one set of rows per invoice line. Populated from the
+    # signed UBL on the Step Zero path; the model prompt never sees it.
+    "line_item_fields": [
+        {
+            "key": "line_description",
+            "type": "string",
+            "label_en": "Description",
+            "label_ar": "الوصف",
+        },
+        {
+            "key": "line_quantity",
+            "type": "decimal",
+            "label_en": "Quantity",
+            "label_ar": "الكمية",
+        },
+        {
+            "key": "line_unit_price",
+            "type": "decimal",
+            "label_en": "Unit price",
+            "label_ar": "سعر الوحدة",
+        },
+        {
+            "key": "line_amount",
+            "type": "decimal",
+            "label_en": "Line amount (excl. VAT)",
+            "label_ar": "مبلغ البند قبل الضريبة",
+        },
+    ],
 }
 
 

@@ -33,7 +33,8 @@ from app.config import get_settings
 from app.db.session import session_scope
 from app.services import storage as storage_mod
 from app.services.extraction.client import OllamaClient
-from app.services.extraction.prompts import parse_schema
+from app.services.extraction.grounding import ground_value
+from app.services.extraction.prompts import parse_line_item_schema, parse_schema
 from app.services.extraction.runner import ExtractedValue, ExtractionResult, run_extraction
 from app.services.pagetext import PageText, TextSource, extract_page_text
 from app.services.raster import TooManyPagesError, rasterize
@@ -164,6 +165,13 @@ async def _process(
         for spec in fields:
             if spec.key in ubl_values:
                 covered += 1
+                # Provenance is the signed XML, full stop: source and confidence
+                # are fixed whatever grounding finds. Grounding only answers
+                # WHERE the value is printed, so the review UI can point at it.
+                # A value the page does not print (an Arabic XML name on an
+                # English-printed invoice, say) simply gets no box — it is not
+                # downgraded, because the XML, not the page, is its authority.
+                grounding = ground_value(ubl_values[spec.key], pages)
                 result.values.append(
                     ExtractedValue(
                         field_key=spec.key,
@@ -171,6 +179,7 @@ async def _process(
                         source="ubl_xml",
                         confidence=1.0,
                         validation_state="auto_validated",
+                        bbox=grounding.bbox,
                     )
                 )
             else:
@@ -186,6 +195,29 @@ async def _process(
                         validation_state="review_suggested",
                     )
                 )
+        # Line items, when the schema asks for them. Same provenance rules as the
+        # header: signed XML, confidence 1.0, grounded only to say WHERE.
+        line_specs = parse_line_item_schema(definition)
+        if ubl_invoice is not None and line_specs:
+            for row_index, line in enumerate(ubl_invoice.to_line_item_values()):
+                for spec in line_specs:
+                    raw = line.get(spec.key)
+                    if raw is None:
+                        continue
+                    # A one- or two-character value ("2", "PCE") matches half
+                    # the page; a box on the wrong "2" is worse than no box.
+                    bbox = ground_value(raw, pages).bbox if len(raw.strip()) >= 3 else None
+                    result.values.append(
+                        ExtractedValue(
+                            field_key=spec.key,
+                            value=raw,
+                            source="ubl_xml",
+                            confidence=1.0,
+                            validation_state="auto_validated",
+                            bbox=bbox,
+                            row_index=row_index,
+                        )
+                    )
         logger.info(
             "pipeline.model_skipped",
             extra={"document_id": str(document_id), "ubl_fields": covered},
@@ -295,8 +327,8 @@ async def _process(
             await session.execute(
                 sql(
                     "INSERT INTO extracted_fields (org_id, annotation_id, field_key, "
-                    "value_extracted, confidence, source, validation_state, bbox) "
-                    "VALUES (:org, :ann, :key, :val, :conf, :src, :state, "
+                    "row_index, value_extracted, confidence, source, validation_state, bbox) "
+                    "VALUES (:org, :ann, :key, :row, :val, :conf, :src, :state, "
                     "CAST(:bbox AS jsonb)) "
                     "ON CONFLICT (annotation_id, field_key, row_index) DO NOTHING"
                 ),
@@ -304,6 +336,7 @@ async def _process(
                     "org": org_id,
                     "ann": annotation_id,
                     "key": value.field_key,
+                    "row": value.row_index,
                     # NULL values are written on purpose — negative examples.
                     "val": value.value,
                     "conf": value.confidence,

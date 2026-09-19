@@ -251,3 +251,32 @@ def build_pdf_with_text_layer(
     doc.save(buffer)
     doc.close()
     return buffer.getvalue()
+
+
+def build_pdf_with_text_layer_and_ubl() -> bytes:
+    """A readable invoice that also carries its signed UBL.
+
+    This is what a ZATCA Phase 2 PDF/A-3 actually is: a page a human reads plus
+    the XML a machine files. The printed values match the XML, formatted the
+    way a supplier's system would print them (thousands separators and all).
+    """
+    from pypdf import PdfReader
+
+    visible = build_pdf_with_text_layer(
+        lines=(
+            "TAX INVOICE",
+            "Invoice No: SA-2026-0334",
+            "Seller VAT No: 310122393510003",
+            "Subtotal: 45,320.00",
+            "VAT 15%: 6,798.00",
+            "Total: 52,118.00 SAR",
+        )
+    )
+    reader = PdfReader(BytesIO(visible))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.add_attachment("invoice.xml", build_ubl_xml())
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()

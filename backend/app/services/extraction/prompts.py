@@ -74,6 +74,20 @@ def parse_schema(definition: dict[str, Any]) -> list[FieldSpec]:
     return [FieldSpec.from_definition(f) for f in fields]
 
 
+def parse_line_item_schema(definition: dict[str, Any]) -> list[FieldSpec]:
+    """Read the optional repeating line-item group out of a schema definition.
+
+    Separate from ``fields`` on purpose: ``parse_schema`` — and therefore the
+    model prompt — never sees these. Line items are persisted from the signed
+    UBL only; asking a 7B model for a variable-length array is a different
+    problem, not built here.
+    """
+    fields = definition.get("line_item_fields")
+    if not isinstance(fields, list):
+        return []
+    return [FieldSpec.from_definition(f) for f in fields if isinstance(f, dict) and "key" in f]
+
+
 def render_field_list(fields: list[FieldSpec]) -> str:
     lines: list[str] = []
     for spec in fields:

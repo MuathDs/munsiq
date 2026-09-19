@@ -23,7 +23,11 @@ ORG = str(uuid.uuid4())
 
 
 def app_with(**overrides: object) -> object:
-    return create_app(Settings(DEBUG_ENDPOINTS=False, DATABASE_URL="", **overrides))  # type: ignore[arg-type]
+    # The flag is pinned OFF unless a test turns it on. Without this the tests
+    # inherit whatever backend/.env says — and a dev .env that enables the BFF
+    # for the demo would make "off by default" silently untested.
+    settings = {"DEBUG_ENDPOINTS": False, "DATABASE_URL": "", "TRUSTED_BFF_ENABLED": False}
+    return create_app(Settings(**{**settings, **overrides}))  # type: ignore[arg-type]
 
 
 async def call(app: object, headers: dict[str, str] | None = None) -> int:

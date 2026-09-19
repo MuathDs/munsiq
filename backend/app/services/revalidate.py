@@ -124,8 +124,10 @@ async def _context_from_db(
     field_rows = (
         await session.execute(
             sql(
+                # Header fields only — see build_context for why line-item
+                # cells stay out of the rules' key-addressed view.
                 "SELECT field_key, value_extracted, value_final, source "
-                "FROM extracted_fields WHERE annotation_id = :a"
+                "FROM extracted_fields WHERE annotation_id = :a AND row_index IS NULL"
             ),
             {"a": annotation_id},
         )

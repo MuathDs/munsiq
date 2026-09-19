@@ -173,6 +173,25 @@ class UBLInvoice(BaseModel):
             if value is not None
         }
 
+    def to_line_item_values(self) -> list[dict[str, str]]:
+        """One dict per InvoiceLine, keyed by the line-item keys a schema may request.
+
+        Kept separate from ``to_extracted_fields`` because a line is a repeating
+        group: each dict becomes a set of extracted_fields rows sharing one
+        ``row_index``. Absent cells are omitted rather than set to None.
+        """
+        rows: list[dict[str, str]] = []
+        for line in self.lines:
+            flat: dict[str, str | None] = {
+                "line_description": line.item_name,
+                "line_quantity": _str(line.invoiced_quantity),
+                "line_unit_code": line.unit_code,
+                "line_unit_price": _str(line.price_amount),
+                "line_amount": _str(line.line_extension_amount),
+            }
+            rows.append({key: value for key, value in flat.items() if value is not None})
+        return rows
+
 
 def _str(value: Decimal | None) -> str | None:
     return None if value is None else str(value)

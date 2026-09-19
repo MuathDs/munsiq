@@ -9,6 +9,7 @@ exactly why tests/test_api_tenancy.py exercises them over HTTP.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -27,9 +28,12 @@ from app.schemas.workspace import (
     PageOut,
     ValidationFinding,
     bbox_from_json,
+    schema_fields_from_definition,
 )
 from app.services.revalidate import revalidate_annotation
 from app.services.signed_urls import page_image_path, sign_page_token
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/annotations", tags=["annotations"])
 
@@ -155,8 +159,28 @@ async def get_annotation(
         )
     ).all()
 
+    # Labels and order come from the queue's extraction schema at request time,
+    # so the workspace shows "Invoice number" / "رقم الفاتورة" instead of a raw
+    # key — and the frontend hardcodes neither the labels nor the field list.
+    definition = await session.scalar(
+        text(
+            "SELECT e.definition FROM annotations a "
+            "JOIN extraction_schemas e ON e.id = a.schema_id WHERE a.id = :id"
+        ),
+        {"id": annotation_id},
+    )
+    schema_fields = schema_fields_from_definition(definition)
+    # A missing label is a schema-authoring gap. The UI falls back to a
+    # humanised key rather than the identifier, but say so here so the gap gets
+    # fixed in the schema instead of living on as "Seller vat number".
+    for spec in schema_fields:
+        missing = [lang for lang in ("label_ar", "label_en") if not getattr(spec, lang)]
+        if missing:
+            logger.warning("extraction schema field %r has no %s", spec.key, " or ".join(missing))
+
     return AnnotationDetail(
         annotation_id=row.id,
+        schema_fields=schema_fields,
         document_id=row.document_id,
         status=row.status,
         model_version=row.model_version,
