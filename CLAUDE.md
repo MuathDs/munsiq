@@ -86,6 +86,24 @@ two lines now, no migration later.
   *verified* against a signature only the server can produce, never *read* from
   the request. See `app/services/signed_urls.py`.
 
+## Known issues — recorded, not yet fixed
+- **Byte-identical re-upload crashes the pipeline.** Suppliers resend invoices
+  all the time, so this will be hit in practice.
+
+  What happens now: `POST /documents` inserts the document row with
+  `sha256 = NULL`, returns 202, and the pipeline sets the hash later with an
+  UPDATE (`app/services/pipeline.py`). For a file this org has already
+  uploaded, that UPDATE violates `UNIQUE(org_id, sha256)` and raises
+  IntegrityError. The result is a 500 in the background task and an orphan
+  document row left with a NULL hash and no usable annotation.
+
+  Correct behaviour: hash the bytes at upload, BEFORE inserting. If
+  `(org_id, sha256)` already exists, return the existing document — **200 with
+  the existing document id, not 202 and never 500** — and do not start a
+  second pipeline run. The constraint stays as the backstop for a race
+  between two concurrent identical uploads; that path should also resolve to
+  the existing row rather than surface the IntegrityError.
+
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.
 - NEVER read tenant identity from a request body or query param. Only from the verified JWT.
