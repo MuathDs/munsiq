@@ -52,3 +52,15 @@ Generate a compliant UBL 2.1 invoice from the ZATCA Fatoora SDK sandbox, or take
 a genuine Phase 2 invoice from a supplier and drop it in. Ideally add three to
 five: at least one compliant PDF/A-3 with embedded UBL, and at least one plain
 Arabic scan with no XML at all.
+
+## `samples/test/` — generated, synthetic, for manual upload testing
+
+Not real samples, and they do not close the gap above. `backend/scripts/make_test_invoices.py`
+writes six invented invoices here (git-ignored) for uploading through the UI:
+two with an embedded UBL (English, Arabic), two digital without one, one with an
+arithmetic error and one with an invalid VAT number. The script prints what each
+should trigger, computed by dry-running the deterministic stages on the files it
+wrote; `tests/test_make_test_invoices.py` pins those expectations.
+
+The UBL in them is ZATCA-shaped and built with the library that reads it back, so
+it shows this code is self-consistent — not that it reads certified output.

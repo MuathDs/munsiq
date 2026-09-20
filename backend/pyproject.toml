@@ -78,6 +78,9 @@ select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF"]
 "app/services/validation/*.py" = ["RUF001", "RUF002", "RUF003"]
 "app/services/validation/rules/*.py" = ["RUF001", "RUF002", "RUF003"]
 "scripts/*" = ["RUF001"]
+# The UBL template is one XML document written out as it will be read; wrapping
+# its lines would only make it harder to compare against the spec.
+"scripts/make_test_invoices.py" = ["RUF001", "E501"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency markers are called in argument defaults by design; that
