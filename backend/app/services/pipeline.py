@@ -470,13 +470,81 @@ def _json_or_none(value: dict[str, float | int] | None) -> str | None:
     return None if value is None else json.dumps(value)
 
 
+FAILURE_RULE = "PIPELINE_FAILED"
+_MAX_ERROR_CHARS = 500
+
+
 async def _mark_failed(org_id: uuid.UUID, document_id: uuid.UUID, error: str) -> None:
-    """Record the failure against the document's annotation, if one exists."""
+    """Make a failed document VISIBLE as a failed annotation with a reason.
+
+    The annotation row is normally created at the very end of the pipeline, so a
+    failure earlier than that — an unreadable PDF, the model being down — leaves
+    no annotation for a bare UPDATE to mark. The document would then look like it
+    is still processing, forever, and nothing would say why. So when there is no
+    annotation, create one (status 'failed', with the one part every annotation
+    needs) and attach the reason as a finding in both languages.
+    """
+    reason = error[:_MAX_ERROR_CHARS]
     try:
         async with session_scope(org_id) as session:
+            marked = (
+                await session.execute(
+                    sql(
+                        "UPDATE annotations SET status = 'failed', "
+                        "blockers = CAST(:blockers AS jsonb), automated = false "
+                        "WHERE document_id = :doc RETURNING id"
+                    ),
+                    {"doc": document_id, "blockers": json.dumps([FAILURE_RULE])},
+                )
+            ).first()
+
+            if marked is None:
+                part_id = await session.scalar(
+                    sql(
+                        "INSERT INTO document_parts (org_id, document_id, part_index, "
+                        "doc_type, page_start, page_end) VALUES (:org, :doc, 0, 'invoice', 1, 1) "
+                        "ON CONFLICT (document_id, part_index) DO UPDATE "
+                        "SET page_end = document_parts.page_end RETURNING id"
+                    ),
+                    {"org": org_id, "doc": document_id},
+                )
+                annotation_id = await session.scalar(
+                    sql(
+                        "INSERT INTO annotations (org_id, document_id, part_id, status, "
+                        "automated, blockers) VALUES (:org, :doc, :part, 'failed', false, "
+                        "CAST(:blockers AS jsonb)) RETURNING id"
+                    ),
+                    {
+                        "org": org_id,
+                        "doc": document_id,
+                        "part": part_id,
+                        "blockers": json.dumps([FAILURE_RULE]),
+                    },
+                )
+            else:
+                annotation_id = marked.id
+
             await session.execute(
-                sql("UPDATE annotations SET status = 'failed' WHERE document_id = :doc"),
-                {"doc": document_id},
+                sql(
+                    "DELETE FROM validation_results WHERE annotation_id = :a AND rule_code = :code"
+                ),
+                {"a": annotation_id, "code": FAILURE_RULE},
+            )
+            await session.execute(
+                sql(
+                    "INSERT INTO validation_results (org_id, annotation_id, rule_code, "
+                    "severity, message_ar, message_en, field_key, passed) "
+                    "VALUES (:org, :ann, :code, 'error', :ar, :en, NULL, false)"
+                ),
+                {
+                    "org": org_id,
+                    "ann": annotation_id,
+                    "code": FAILURE_RULE,
+                    # The technical reason stays in its original language on
+                    # purpose: it is an exception message, not prose to translate.
+                    "ar": f"تعذّرت معالجة هذا المستند. السبب التقني: {reason}",
+                    "en": f"Processing failed: {reason}",
+                },
             )
     except Exception:
         logger.exception("pipeline.mark_failed_failed")

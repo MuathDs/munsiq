@@ -1,4 +1,4 @@
-"""Short-lived signed URLs for page images.
+"""Short-lived signed URLs for page images and document uploads.
 
 Local filesystem storage has no presigning, so this is the equivalent: a token
 the server mints and later verifies, standing in for what S3 would issue. The
@@ -22,6 +22,12 @@ It is not, and the distinction is the whole point:
 This is the same model as an S3 presigned URL, where authorization travels in
 the signature rather than in a session. An `<img src>` cannot carry a bearer
 token, so the URL has to be self-authorizing.
+
+UPLOADS use the same mechanism for the same reason CLAUDE.md gives for images:
+document bytes must not stream through Next.js. The BFF, which holds the tenant
+identity, asks this API to authorize an upload; the browser then posts the PDF
+straight to the API against the returned token. Tokens are bound to a *kind*, so
+a page-image token can never authorize an upload, nor an upload token a read.
 """
 
 from __future__ import annotations
@@ -89,34 +95,16 @@ def _b64decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + padding)
 
 
-@dataclass(frozen=True)
-class PageGrant:
-    """What a verified token authorizes."""
-
-    org_id: uuid.UUID
-    document_id: uuid.UUID
-    page_number: int
-
-
-def sign_page_token(
-    org_id: uuid.UUID, document_id: uuid.UUID, page_number: int, ttl_s: int | None = None
-) -> str:
-    """Mint a token authorizing one page image of one document for one tenant."""
-    settings = get_settings()
-    ttl = settings.PAGE_URL_TTL_S if ttl_s is None else ttl_s
-    payload = {
-        "o": str(org_id),
-        "d": str(document_id),
-        "p": int(page_number),
-        "e": int(time.time()) + ttl,
-    }
+def _seal(payload: dict[str, object]) -> str:
+    """Serialize and sign a payload. Sorted keys keep signing deterministic."""
     encoded = _b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     signature = hmac.new(_secret().encode(), encoded.encode(), _ALGORITHM).digest()
     return f"{encoded}{_SEPARATOR}{_b64encode(signature)}"
 
 
-def verify_page_token(token: str) -> PageGrant:
-    """Verify a token and return what it authorizes.
+def _open(token: str) -> dict[str, object]:
+    """Verify the signature, then the payload's shape, then its expiry — in that
+    order, so a tampered token is reported as tampered whatever its clock says.
 
     Raises:
         SignatureError: malformed, tampered with, or expired.
@@ -139,19 +127,94 @@ def verify_page_token(token: str) -> PageGrant:
 
     try:
         payload = json.loads(_b64decode(encoded))
-        grant = PageGrant(
-            org_id=uuid.UUID(payload["o"]),
-            document_id=uuid.UUID(payload["d"]),
-            page_number=int(payload["p"]),
-        )
         expires_at = int(payload["e"])
     except (ValueError, KeyError, TypeError) as exc:
         raise SignatureError("malformed payload") from exc
+    if not isinstance(payload, dict):
+        raise SignatureError("malformed payload")
 
     if time.time() > expires_at:
         raise SignatureError("token has expired")
+    return payload
 
-    return grant
+
+@dataclass(frozen=True)
+class PageGrant:
+    """What a verified token authorizes."""
+
+    org_id: uuid.UUID
+    document_id: uuid.UUID
+    page_number: int
+
+
+def sign_page_token(
+    org_id: uuid.UUID, document_id: uuid.UUID, page_number: int, ttl_s: int | None = None
+) -> str:
+    """Mint a token authorizing one page image of one document for one tenant."""
+    settings = get_settings()
+    ttl = settings.PAGE_URL_TTL_S if ttl_s is None else ttl_s
+    return _seal(
+        {
+            "o": str(org_id),
+            "d": str(document_id),
+            "p": int(page_number),
+            "e": int(time.time()) + ttl,
+        }
+    )
+
+
+def verify_page_token(token: str) -> PageGrant:
+    """Verify a token and return what it authorizes.
+
+    Raises:
+        SignatureError: malformed, tampered with, or expired.
+    """
+    payload = _open(token)
+    try:
+        return PageGrant(
+            org_id=uuid.UUID(str(payload["o"])),
+            document_id=uuid.UUID(str(payload["d"])),
+            page_number=int(payload["p"]),  # type: ignore[call-overload]
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SignatureError("malformed payload") from exc
+
+
+UPLOAD_KIND: Final[str] = "upload"
+
+
+@dataclass(frozen=True)
+class UploadGrant:
+    """What a verified upload token authorizes: uploading, for one tenant."""
+
+    org_id: uuid.UUID
+
+
+def sign_upload_token(org_id: uuid.UUID, ttl_s: int | None = None) -> str:
+    """Mint a token authorizing document uploads for one tenant.
+
+    The ``k`` claim binds it to uploads. A page-image token has no ``k``, so it
+    is refused here; an upload token has no document or page, so it is refused
+    by the image route.
+    """
+    settings = get_settings()
+    ttl = settings.UPLOAD_URL_TTL_S if ttl_s is None else ttl_s
+    return _seal({"k": UPLOAD_KIND, "o": str(org_id), "e": int(time.time()) + ttl})
+
+
+def verify_upload_token(token: str) -> UploadGrant:
+    """Verify an upload token.
+
+    Raises:
+        SignatureError: malformed, tampered with, expired, or not an upload token.
+    """
+    payload = _open(token)
+    if payload.get("k") != UPLOAD_KIND:
+        raise SignatureError("token is not an upload token")
+    try:
+        return UploadGrant(org_id=uuid.UUID(str(payload["o"])))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SignatureError("malformed payload") from exc
 
 
 def page_image_path(token: str, prefix: str = "/api/v1") -> str:

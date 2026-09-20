@@ -102,6 +102,17 @@ class Settings(BaseSettings):
     # session, so a long life turns a leaked URL into a standing grant.
     PAGE_URL_TTL_S: int = 300
 
+    # Upload authorizations expire just as fast, and for the same reason: the
+    # token is a standing grant to write documents into one tenant while it lives.
+    UPLOAD_URL_TTL_S: int = 300
+
+    # A document with no annotation this long after upload is reported as
+    # 'stalled' instead of 'processing'. The pipeline runs in a background task
+    # with no retries (see CLAUDE.md), so a process that died mid-document would
+    # otherwise look like it is still working, forever. The model path took ~3
+    # minutes on this machine; this leaves generous headroom.
+    STALLED_AFTER_S: int = 900
+
     # ----------------------------------------------------------------- #
     # Trusted BFF — a scaffold for deferred authentication
     # ----------------------------------------------------------------- #

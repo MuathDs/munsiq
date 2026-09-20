@@ -12,6 +12,33 @@ class UploadResponse(BaseModel):
     filename: str | None = None
     size_bytes: int
     status: str
+    annotation_id: uuid.UUID | None = None
+    duplicate: bool = Field(
+        default=False,
+        description=(
+            "True when this exact file was already uploaded. The response is 200 and "
+            "carries the EXISTING document; nothing was stored and no second "
+            "pipeline run was started."
+        ),
+    )
+    retried: bool = Field(
+        default=False,
+        description=(
+            "True when the earlier attempt at this exact file had failed or stalled "
+            "and processing was started again on the existing document."
+        ),
+    )
+
+
+class UploadAuthorization(BaseModel):
+    """A presigned upload: where the browser may POST a PDF, and for how long."""
+
+    upload_url: str = Field(
+        description="Path (with a signed token) the browser posts the PDF to, as "
+        "multipart field `file`. Relative to the API origin."
+    )
+    expires_in: int
+    max_bytes: int
 
 
 class PageStatus(BaseModel):

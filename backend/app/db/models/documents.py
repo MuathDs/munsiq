@@ -36,6 +36,9 @@ class Document(Base, OrgScopedMixin):
         UUID(as_uuid=True), ForeignKey("queues.id", ondelete="SET NULL")
     )
     storage_key: Mapped[str | None] = mapped_column(Text)
+    # The name the uploader gave the file. Display only — storage keys are built
+    # from UUIDs, never from this, because it is attacker-controlled text.
+    filename: Mapped[str | None] = mapped_column(Text)
     sha256: Mapped[bytes | None] = mapped_column(LargeBinary)
     mime_type: Mapped[str | None] = mapped_column(Text)
     page_count: Mapped[int | None] = mapped_column(Integer)
