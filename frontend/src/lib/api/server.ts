@@ -20,7 +20,17 @@ import "server-only";
  * user's token instead, and let the backend read its own claim.
  */
 
-import type { AnnotationDetail, CorrectionEvent, CorrectionResult } from "./types";
+import type {
+  AnnotationDetail,
+  CorrectionEvent,
+  CorrectionResult,
+  DocumentListItem,
+  Org,
+  Stats,
+  SystemInfo,
+  Template,
+  UploadAuthorization,
+} from "./types";
 
 const API_BASE = process.env.MUNSIQ_API_URL ?? "http://127.0.0.1:8000";
 
@@ -55,7 +65,14 @@ function assertConfigured(): void {
   }
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * The backend's response, untouched, once it is known to be successful.
+ *
+ * `call` parses JSON; the export route needs the raw body and headers so a
+ * spreadsheet arrives as a spreadsheet. Both share the auth headers and the
+ * error handling, which is the part that must never diverge.
+ */
+async function callRaw(path: string, init?: RequestInit): Promise<Response> {
   assertConfigured();
   const response = await fetch(`${API_BASE}/api/v1${path}`, {
     ...init,
@@ -82,7 +99,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(response.status, `${init?.method ?? "GET"} ${path}`, body);
   }
-  return (await response.json()) as T;
+  return response;
+}
+
+async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await (await callRaw(path, init)).json()) as T;
 }
 
 export function getAnnotation(id: string): Promise<AnnotationDetail> {
@@ -101,6 +122,48 @@ export function patchFields(
 
 export function confirmAnnotation(id: string): Promise<{ status: string }> {
   return call<{ status: string }>(`/annotations/${id}/confirm`, { method: "POST" });
+}
+
+export function getDocuments(limit = 100): Promise<DocumentListItem[]> {
+  return call<DocumentListItem[]>(`/documents?limit=${limit}`);
+}
+
+export function getStats(): Promise<Stats> {
+  return call<Stats>("/stats");
+}
+
+export function getTemplates(): Promise<Template[]> {
+  return call<Template[]>("/templates");
+}
+
+export function getOrg(): Promise<Org> {
+  return call<Org>("/org");
+}
+
+export function getSystem(): Promise<SystemInfo> {
+  return call<SystemInfo>("/system");
+}
+
+/**
+ * Ask the backend to authorize ONE upload, then hand the browser an absolute URL.
+ *
+ * The PDF itself never touches Next.js (CLAUDE.md: "Do not stream document bytes
+ * through Next.js"). This server holds the tenant identity, so it does the
+ * asking; the browser receives only an opaque signed URL that expires in
+ * minutes, and posts the file straight to the API with it.
+ */
+export async function authorizeUpload(): Promise<UploadAuthorization> {
+  const granted = await call<UploadAuthorization>("/documents/authorize", { method: "POST" });
+  return { ...granted, upload_url: `${API_BASE}${granted.upload_url}` };
+}
+
+/**
+ * A confirmed annotation's export, as the backend rendered it. Structured data
+ * (JSON, XLSX, CSV) — not document bytes — so proxying it is not what the
+ * "no document bytes through Next.js" rule is about.
+ */
+export function exportAnnotation(id: string, format: string): Promise<Response> {
+  return callRaw(`/annotations/${id}/export?format=${encodeURIComponent(format)}`);
 }
 
 /**

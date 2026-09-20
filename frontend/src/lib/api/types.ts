@@ -102,6 +102,115 @@ export interface CorrectionResult {
   findings: ValidationFinding[];
 }
 
+// --------------------------------------------------------------------------- //
+// Dashboard — mirrors backend/app/schemas/dashboard.py
+// --------------------------------------------------------------------------- //
+
+/**
+ * A document's state: 'processing' and 'stalled' exist only here (there is no
+ * annotation yet); the rest is the latest annotation's status.
+ */
+export type DocState =
+  | "processing"
+  | "stalled"
+  | "to_review"
+  | "reviewing"
+  | "confirmed"
+  | "approved"
+  | "exporting"
+  | "exported"
+  | "rejected"
+  | "failed"
+  | (string & {});
+
+export interface DocumentListItem {
+  document_id: string;
+  /** Null until the pipeline finishes or fails — there is nothing to open yet. */
+  annotation_id: string | null;
+  filename: string | null;
+  created_at: string;
+  state: DocState;
+  has_embedded_ubl: boolean;
+  /** Null when Step Zero answered and no model was called. */
+  model_version: string | null;
+  page_count: number | null;
+  invoice_number: string | null;
+  seller_name: string | null;
+  /** Exactly as extracted or corrected. A string: money is never a float. */
+  total_amount: string | null;
+  currency: string | null;
+  blocking_count: number;
+  error_en: string | null;
+  error_ar: string | null;
+}
+
+export interface AccuracyStats {
+  annotations: number;
+  fields_total: number;
+  fields_corrected: number;
+}
+
+export interface Stats {
+  documents_total: number;
+  processed: number;
+  in_progress: number;
+  awaiting_review: number;
+  blocked: number;
+  confirmed: number;
+  failed: number;
+  from_signed_xml: number;
+  /** Null when not computable — the card is hidden, never filled with a placeholder. */
+  accuracy: AccuracyStats | null;
+}
+
+export interface Template {
+  id: string;
+  version: number;
+  name: string | null;
+  queue_id: string | null;
+  queue_name: string | null;
+  in_use: boolean;
+  created_at: string;
+  fields: SchemaField[];
+}
+
+export interface Org {
+  id: string;
+  name: string;
+  vat_number: string | null;
+  data_region: string | null;
+}
+
+export interface SystemInfo {
+  environment: string;
+  inference_model: string;
+  extraction_use_vision: boolean;
+  ocr_engine: string;
+  max_upload_bytes: number;
+  grounding_threshold: number;
+  stalled_after_s: number;
+}
+
+/** What the browser needs to POST one PDF straight to the API. */
+export interface UploadAuthorization {
+  /** Absolute URL, carrying a signed token. Expires in minutes. */
+  upload_url: string;
+  expires_in: number;
+  max_bytes: number;
+}
+
+export interface UploadResult {
+  document_id: string;
+  filename: string | null;
+  size_bytes: number;
+  status: string;
+  annotation_id: string | null;
+  /** True when this exact file was already uploaded (HTTP 200, not 202). */
+  duplicate: boolean;
+  /** True when an earlier failed attempt is being processed again. */
+  retried: boolean;
+}
+
 /** The current value: a human correction supersedes what was extracted. */
 export function currentValue(field: ExtractedField): string | null {
   return field.value_final !== null ? field.value_final : field.value_extracted;

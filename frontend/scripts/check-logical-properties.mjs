@@ -7,36 +7,19 @@
  * reviewer and the other silently does not, and the bug is invisible to anyone
  * testing in English.
  *
- * EXCLUSIONS. The legacy dashboard predates this rule and is explicitly frozen
- * under CLAUDE.md ("Deprecated paths — do not extend or imitate"). Rewriting it
- * to pass a lint rule would be exactly the kind of unrequested churn that
- * document forbids, so those files are listed by path rather than the rule
- * being weakened for everyone.
+ * NO EXCLUSIONS. The prototype dashboard used to be listed here as frozen legacy.
+ * It is now the app shell and is held to the same rule as everything else; a rule
+ * with a carve-out for the oldest code is a rule that quietly stops applying.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // fileURLToPath, not URL.pathname: this repo lives under a directory with a
 // space in its name, which pathname returns percent-encoded.
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SRC = join(ROOT, "src");
-
-/** Frozen legacy files. Do not add to this list — fix new code instead. */
-const EXCLUDED = new Set(
-  [
-    "src/components/BatchProcessingPage.tsx",
-    "src/components/ToastStack.tsx",
-    "src/components/dashboard/ProcessingBanner.tsx",
-    "src/components/dashboard/ResultsTable.tsx",
-    "src/components/dashboard/Sidebar.tsx",
-    "src/components/dashboard/StatsCards.tsx",
-    "src/components/dashboard/StatusBadge.tsx",
-    "src/components/dashboard/TopBar.tsx",
-    "src/components/dashboard/UploadDropzone.tsx",
-  ].map((p) => p.split("/").join(sep)),
-);
 
 /**
  * `border-s-*` / `border-e-*` are logical and must not be caught by the
@@ -47,8 +30,8 @@ const PATTERNS = [
   { re: /\bp[lr]-[\w.[\]/-]+/g, hint: "use ps-/pe-" },
   { re: /\b(?:left|right)-[\w.[\]/-]+/g, hint: "use start-/end-" },
   { re: /\btext-(?:left|right)\b/g, hint: "use text-start/text-end" },
-  { re: /\bborder-[lr]-[\w.[\]/-]+/g, hint: "use border-s-/border-e-" },
-  { re: /\brounded-[tb]?[lr]-[\w.[\]/-]+/g, hint: "use rounded-*s-/rounded-*e-" },
+  { re: /\bborder-[lr](?:-[\w.[\]/-]+)?(?![\w-])/g, hint: "use border-s-/border-e-" },
+  { re: /\brounded-[tb]?[lr](?:-[\w.[\]/-]+)?(?![\w-])/g, hint: "use rounded-*s-/rounded-*e-" },
 ];
 
 function* walk(dir) {
@@ -62,8 +45,6 @@ function* walk(dir) {
 let failures = 0;
 for (const file of walk(SRC)) {
   const rel = relative(ROOT, file);
-  if (EXCLUDED.has(rel)) continue;
-
   const lines = readFileSync(file, "utf8").split("\n");
   lines.forEach((line, index) => {
     // A rule that flags its own documentation is a rule people delete.

@@ -12,13 +12,14 @@ export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 w-[340px]">
+    <div className="fixed bottom-6 end-6 z-50 flex w-[340px] flex-col gap-2">
       {toasts.map((toast) => {
         const isError = toast.variant === "error";
         return (
           <div
             key={toast.id}
-            className={`flex items-start gap-2 rounded-[10px] border px-4 py-3 text-[13px] shadow-lg bg-surface ${
+            role="alert"
+            className={`flex items-start gap-2 rounded-[10px] border bg-surface px-4 py-3 text-[13px] shadow-lg ${
               isError ? "border-warning/30 text-warning" : "border-success/30 text-success"
             }`}
           >

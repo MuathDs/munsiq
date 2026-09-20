@@ -1,29 +1,53 @@
-import { Check, AlertTriangle, Loader2 } from "lucide-react";
-import type { InvoiceJob } from "@/lib/types";
+import { Check, CircleAlert, Eye, Loader2, ShieldAlert, TriangleAlert } from "lucide-react";
 
-export function StatusBadge({ job }: { job: InvoiceJob }) {
-  if (job.status === "processing") {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-line text-ink-soft text-xs font-medium px-3 py-1">
-        <Loader2 size={12} className="animate-spin" />
-        Processing
-      </span>
-    );
-  }
+import type { DocumentListItem } from "@/lib/api/types";
+import type { Locale } from "@/lib/i18n";
+import type { Messages } from "@/lib/messages";
 
-  if (job.status === "error" || job.needsReview) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-warning/15 text-warning text-xs font-medium px-3 py-1">
-        <AlertTriangle size={12} />
-        Needs review
-      </span>
-    );
-  }
+import { categoryOf, type Category } from "./docState";
+
+const STYLE: Record<Category, string> = {
+  processing: "bg-line text-ink-soft",
+  review: "bg-warning/15 text-warning",
+  blocked: "bg-danger/15 text-danger",
+  confirmed: "bg-success/15 text-success",
+  failed: "bg-danger/15 text-danger",
+};
+
+function labelFor(doc: DocumentListItem, category: Category, t: Messages): string {
+  if (category === "blocked") return t.status.blocked;
+  const known = (t.status as Record<string, string>)[doc.state];
+  return known ?? doc.state;
+}
+
+export function StatusBadge({
+  doc,
+  t,
+  locale,
+}: {
+  doc: DocumentListItem;
+  t: Messages;
+  locale: Locale;
+}) {
+  const category = categoryOf(doc);
+  const Icon = {
+    processing: Loader2,
+    review: Eye,
+    blocked: ShieldAlert,
+    confirmed: Check,
+    failed: doc.state === "stalled" ? TriangleAlert : CircleAlert,
+  }[category];
+
+  // A failed document says why on hover, in the reviewer's language.
+  const reason = locale === "ar" ? doc.error_ar : doc.error_en;
 
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-success/15 text-success text-xs font-medium px-3 py-1">
-      <Check size={12} />
-      Extracted
+    <span
+      title={category === "failed" && reason ? reason : undefined}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${STYLE[category]}`}
+    >
+      <Icon size={12} className={category === "processing" ? "animate-spin" : ""} aria-hidden />
+      {labelFor(doc, category, t)}
     </span>
   );
 }

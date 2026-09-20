@@ -69,6 +69,33 @@ body {
   scrollbar-color: var(--color-line-strong) transparent;
 }
 
+/* "Working, no idea how far": a bar that moves without claiming a percentage.
+   The backend pipeline reports no progress, so a determinate bar would be a lie.
+   `inset-inline-start` keeps the sweep running the right way in RTL. */
+@keyframes munsiq-indeterminate {
+  0% {
+    inset-inline-start: -40%;
+  }
+  100% {
+    inset-inline-start: 100%;
+  }
+}
+
+.indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+
+.indeterminate::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inline-size: 40%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  animation: munsiq-indeterminate 1.4s ease-in-out infinite;
+}
+
 /* The splitter drag must not select the panes' text. */
 .dragging,
 .dragging * {
