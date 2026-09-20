@@ -35,7 +35,7 @@ built around that fact:
 
 ```mermaid
 flowchart TD
-    A["POST /documents<br/>PDF in"] --> B["Object storage + document row"]
+    A["Upload · presigned URL<br/>PDF posted straight to the API"] --> B["Hash first: a resend returns the existing document<br/>Object storage + document row, committed"]
     B --> C{"Embedded UBL XML?"}
     C -->|"yes — Step Zero"| D["Parse signed UBL<br/>header + line items<br/>source=ubl_xml · confidence 1.0<br/><b>model never called</b>"]
     C -->|"no"| E["Schema-conditioned extraction<br/>field list read from the database<br/>Ollama · OpenAI-compatible API"]
@@ -51,6 +51,7 @@ flowchart TD
     K -->|"corrections → revalidate"| I
     K --> L["Confirm<br/>refused while a blocker stands"]
     L --> M["Export MunsiqInvoiceV1<br/>json · xlsx · csv"]
+    J --> N["Dashboard · History<br/>live state, stats computed from the data"]
 ```
 
 ## Why this is not a CRUD app
@@ -97,13 +98,15 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **291 passed, 1 skipped, 1 xfailed — 18m14s** | full `pytest` run against Supabase Postgres 17, 2026-09-19 |
-| Validation rules | **14** (10 blocking, 4 advisory) | `@rule` decorators across `app/services/validation/rules/` |
-| Validation coverage | **100% statements and branches** — 445 statements, 148 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 97 tests in 21.9s |
-| Export renderers | **18 tests, 2.3s**, no database | `tests/test_export_render.py` |
-| Document A, compliant | **0 model calls**; 19 fields (11 header + 8 line-item cells); 9/11 header and 5/8 line cells grounded; no blockers; 29.8s end to end | `scripts/seed_demo_documents.py`, 2026-09-19 |
-| Document B, model path | `qwen2.5:7b-instruct` via Ollama; **11/11 fields grounded**; confidences 0.857–1.000; 1 blocker (`GRAND_TOTAL_MISMATCH`); model 164.9s, pipeline 181.0s | same run, CPU inference |
-| Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies` |
+| Backend test suite | **343 passed, 1 skipped, 1 xfailed — 18m16s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-20. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Validation rules | **14** (10 blocking errors, 4 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-20 |
+| Validation coverage | **100% statements and branches** — 445 statements, 148 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 97 tests, 23.3 s under coverage instrumentation and **1.6 s** without it (the rules are pure functions) |
+| Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
+| Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies`, 2026-09-20 |
+| Document A, compliant | **0 model calls**; 19 fields (11 header + 8 line-item cells); 9/11 header and 5/8 line cells grounded; no blockers | queried from the database, 2026-09-20 |
+| Document B, model path | `qwen2.5:7b-instruct` via Ollama; **11/11 fields grounded**; confidences 0.857–1.000; 1 blocker (`GRAND_TOTAL_MISMATCH`); model call **164.9 s** | queried from the database (`annotations.latency_ms` = 164,875), 2026-09-20 |
+| Seed wall clock | A: 29.8 s, B: 181.0 s (pipeline, end to end) | printed by `scripts/seed_demo_documents.py` on 2026-09-19. **Not re-measured**, and which hardware the model ran on was not recorded |
+| Live upload, through the UI | compact 7 KB compliant PDF: dropped → *Ready for review* in ≈33 s; an unreadable PDF → *Processing failed: … not a readable PDF* in ≈27 s | driven in the browser on 2026-09-20; sampled every 3 s, so ±3 s |
 
 The ungrounded values on document A are honest gaps, not failures. The seller's
 legal name is Arabic in the XML while the page prints the English trading name;
@@ -112,6 +115,38 @@ purchase-order number is not on that invoice at all; and the two line
 quantities ("2", "4") are too short to locate safely — a box on the wrong "2"
 is worse than no box. Each gets no bounding box rather than a wrong one, and
 keeps its authority either way: the XML is what was signed, not the page.
+
+## The dashboard
+
+The app shell: upload, watch, review, export. Everything on it is read from the
+backend through the BFF; nothing is a placeholder.
+
+* **Stat cards are computed, and a card the data cannot support is not shown at
+  all** — no dash, no zero, no estimate. *Extraction accuracy* is the share of
+  fields a reviewer did not have to change, over **confirmed** invoices only,
+  because "nobody corrected it" means nothing until somebody reviewed it. It
+  counts a deleted value as a correction (the correction log is the only place
+  that shows it) and ignores fields correctly absent on both sides. It stays
+  hidden until an invoice has been confirmed. The prototype's *Time saved* card —
+  a hard-coded 3 minutes per document — is gone.
+* **Upload is real.** The PDF goes straight from the browser to the API with a
+  short-lived signed URL, so document bytes never stream through Next.js and the
+  progress bar is measured from the browser's own upload events. After that the
+  pipeline reports no percentages, so the row shows an elapsed timer instead of a
+  number nobody measured.
+* **Nothing fails silently.** A failed document is a row that says why, in both
+  languages, and uploading the same file again retries it. A resent invoice
+  returns the existing document instead of crashing.
+
+![Dashboard, English](docs/screenshots/dashboard-en.png)
+
+![Dashboard, Arabic — the whole shell mirrors](docs/screenshots/dashboard-ar.png)
+
+![Batch upload](docs/screenshots/upload-en.png)
+
+![History, with search, status filters and per-row export](docs/screenshots/history-en.png)
+
+![Templates: the extraction schemas the pipeline reads, read-only](docs/screenshots/templates-en.png)
 
 ## The review workspace
 
@@ -190,6 +225,12 @@ Inference (only needed for documents without embedded XML):
 ollama pull qwen2.5:7b-instruct
 ```
 
+The frontend reaches the API through a BFF that holds the tenant identity
+server-side, so both halves need the shared secret. In `backend/.env` set
+`TRUSTED_BFF_ENABLED=true` and `TRUSTED_BFF_SECRET`; in `frontend/.env.local` set
+the same value as `MUNSIQ_BFF_SECRET`, plus `MUNSIQ_ORG_ID` from the `seed_demo`
+output. The browser never sees either.
+
 Run both halves:
 
 ```bash
@@ -200,8 +241,25 @@ cd backend && .venv/Scripts/python.exe -m uvicorn app.main:app --reload
 cd frontend && npm install && cp .env.local.example .env.local && npm run dev
 ```
 
-`MUNSIQ_ORG_ID` in `frontend/.env.local` comes from the `seed_demo` output; the
-browser never sees it. Then open the URL `seed_demo_documents` printed.
+Then open <http://localhost:3000> — it redirects to the dashboard.
+
+To try your own uploads, generate six varied test invoices (git-ignored, and not
+processed — upload them through the UI):
+
+```bash
+cd backend && .venv/Scripts/python.exe -m scripts.make_test_invoices
+```
+
+It prints what each should trigger, computed by dry-running the deterministic
+stages on the files it wrote: two carry a signed UBL (English, Arabic-primary) and
+raise nothing; two are digital without one (English, Arabic) and go to the model;
+`05_arithmetic_error.pdf` fires `VAT_CALC_MISMATCH`; `06_invalid_trn.pdf` fires
+`TRN_CHECKSUM`. The last four need Ollama running. The UBL in them is
+ZATCA-*shaped* and read back by the library that built it, so it shows the code
+is self-consistent, not that it reads certified output.
+
+The quickstart has been run in pieces on this machine, not end to end from a
+fresh clone.
 
 Gates:
 
@@ -233,8 +291,13 @@ worse than one that says where it stops. Full detail in `CLAUDE.md`.
   unused is a documented next step.
 * **Line items from the model.** They come from the signed XML only.
 
-Known bugs are tracked in `CLAUDE.md` under "Known issues" — including a
-byte-identical re-upload crashing the pipeline, which is real and unfixed.
+Bugs found along the way are recorded in `CLAUDE.md`. Two worth naming because
+they were real and are fixed: a byte-identical re-upload used to crash the
+pipeline and orphan a row, and `POST /documents` had never worked end to end —
+the pipeline started before the request's transaction committed, so it could not
+find the document it was scheduled for. No test went through that path; driving a
+real upload through the UI did, and the regression test was watched failing
+before the fix.
 
 ## Layout
 
@@ -242,8 +305,10 @@ byte-identical re-upload crashing the pipeline, which is real and unfixed.
 backend/     FastAPI, SQLAlchemy 2.0 async, Alembic, the pipeline and rules
 frontend/    Next.js 16 App Router, TypeScript strict, Tailwind, BFF routes
 docs/        db.md · ingestion.md · validation.md · demo.md · adr/ · screenshots/
-samples/     real invoices, git-ignored — never committed
-src/         legacy synthetic-data prototype (docs/legacy-data-pipeline.md)
+             design-handoff/ (the original dashboard design) · legacy/
+samples/     real invoices, git-ignored — never committed; test/ is generated
+legacy/      the pre-Munsiq prototype: pandas → Excel reporter, fine-tune notebook
+             (not maintained; see legacy/README.md)
 ```
 
 Architecture decisions: [`docs/adr/`](docs/adr/) —
