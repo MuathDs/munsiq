@@ -1,9 +1,10 @@
 # Legacy prototype — synthetic data pipeline
 
 > This was the repository's original README. It describes the pre-Munsiq
-> prototype in `src/data_pipeline/`, which is kept working but is deprecated
-> (see "Deprecated paths" in `CLAUDE.md`). The current system is described in
-> the root [`README.md`](../README.md).
+> prototype, which now lives in [`legacy/`](../legacy/) and is not maintained.
+> Paths below are as they were at the old repository root. Note that
+> `generate_data.py`, which this README documents, was never committed. The
+> current system is described in the root [`README.md`](../README.md).
 
 Staff-level MLOps scaffold for building a fine-tuned small LLM on a synthetic,
 bilingual (Saudi Arabic / English) **industrial procurement** dataset —

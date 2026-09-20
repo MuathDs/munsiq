@@ -113,14 +113,17 @@ two lines now, no migration later.
 - The UI is bilingual ar/en with full RTL. Use CSS logical properties, never left/right.
 - No secrets in code. Everything through pydantic-settings / .env.
 
-## Deprecated paths — do not extend or imitate
-- `frontend/src/app/api/extract` and `frontend/src/app/api/invoices/*` call
-  Ollama directly from Next.js route handlers. Legacy prototype.
-  Keep working, do not delete, do not extend.
-- `src/data_pipeline/` is the legacy Ollama -> pandas -> Excel path.
-  Same status.
-- HARD RULE: no NEW frontend code calls a model endpoint directly.
-  All inference goes through the FastAPI backend.
+## Legacy — and the one rule that survives it
+- The prototype (pandas -> Excel batch reporter, the LoRA fine-tune notebook,
+  generated datasets) lives in `legacy/`. Not maintained; nothing in `backend/`
+  or `frontend/` imports from it. See `legacy/README.md`.
+- The prototype's dashboard UI shell (sidebar, stat cards, dropzone, table) was
+  UNFROZEN on 2026-09-20 and is now the app shell, wired to the FastAPI backend
+  through the BFF. Its direct-to-Ollama route handlers (`api/extract`,
+  `api/invoices/*`) and their plumbing (`munsiqModel.ts`, `jobStore.ts`) are
+  deleted. It follows every rule in this file, including the RTL rule.
+- HARD RULE, unchanged: no frontend code calls a model endpoint. All inference
+  goes through the FastAPI backend.
 - Inference is reached ONLY via `settings.INFERENCE_BASE_URL`
   (default `http://localhost:11434/v1`). Never hardcode a model URL.
 
@@ -133,5 +136,6 @@ two lines now, no migration later.
 - Do not stream document bytes through Next.js. Use presigned URLs.
 - Do not add dependencies without saying why in the commit message.
 - Do not create files outside backend/, frontend/, infra/, docs/, samples/.
+  (`legacy/` is a read-only archive; do not add to it.)
 - Do not commit real invoices. samples/*.pdf and samples/*.xml are git-ignored
   because they carry live TRNs, IBANs and supplier names.

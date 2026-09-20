@@ -1,3 +1,17 @@
+# ===========================================================================
+# SUPERSEDED — kept as a record, not for use.
+#
+# This defines `munsiq-extractor`, the LoRA fine-tune of Qwen2.5-7B-Instruct
+# that emitted five fixed columns. The field list was baked into the weights,
+# so adding a sixth field meant retraining. It was replaced by a general instruct
+# model (`qwen2.5:7b-instruct`) that is handed the field list in the prompt at
+# request time — see docs/adr/002-schema-conditioned-prompting.md.
+#
+# The FROM path below is relative to the old repository root, where the merged
+# .gguf lived. It no longer resolves from this directory. The model itself is
+# still registered in Ollama as `munsiq-extractor:latest`.
+# ===========================================================================
+
 FROM ./Qwen2.5-7B-Instruct.Q4_K_M.gguf
 
 # Pass the prompt straight through -- no ChatML wrapping.
