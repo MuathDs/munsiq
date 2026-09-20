@@ -177,6 +177,38 @@ The trade-off is real and is recorded in CLAUDE.md: **no retries, and no
 durability across a restart.** A process restart mid-document leaves that
 document unprocessed with no automatic recovery.
 
+## The upload path
+
+1. **Authorize.** The BFF holds the tenant identity, so it calls
+   `POST /documents/authorize`, which returns a signed, five-minute upload URL.
+   The browser never sees a tenant id, and — per CLAUDE.md — document bytes never
+   stream through Next.js.
+2. **Post.** The browser sends the PDF straight to `POST /documents?upload_token=…`
+   (which also still accepts the trusted-BFF headers, for API clients and tests).
+   A page-image token cannot authorize an upload, nor an upload token a read: the
+   token carries a `kind`.
+3. **Validate, then hash — before storing anything.** Empty is 400, over
+   `MAX_UPLOAD_BYTES` is 413, and anything without a `%PDF-` header in its first
+   KiB is 415. The SHA-256 is computed next.
+4. **Resends are idempotent.** A file this tenant already holds returns the
+   existing document with **200**, never a 500 and never a second pipeline run.
+   `UNIQUE(org_id, sha256)` is the backstop for two identical concurrent uploads;
+   the loser resolves to the winner's row through a savepoint.
+5. **Except a failed or stalled attempt**, which is *retried*: uploading the same
+   file again clears the failed annotation and processes the stored bytes again.
+   Without this, deduplication would make a failure permanent.
+6. **Commit, then start the pipeline.** The handler owns its transaction and
+   schedules `process_document` only after it commits. FastAPI (≥ 0.118) runs a
+   yield-dependency's teardown — where a request session commits — *after* the
+   response and its background tasks, so a handler that wrote through such a
+   session and then queued the pipeline raced its own commit and lost: the
+   pipeline found no document. Do not reintroduce that shape.
+
+A document with no annotation is `processing`; past `STALLED_AFTER_S` (15 min) it
+is reported as `stalled`, because a process that died mid-document would otherwise
+look busy forever. A pipeline failure creates a `failed` annotation with a
+`PIPELINE_FAILED` finding in both languages, so the reason is visible.
+
 ## Running it
 
 ```bash

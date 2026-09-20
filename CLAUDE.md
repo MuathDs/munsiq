@@ -86,23 +86,42 @@ two lines now, no migration later.
   *verified* against a signature only the server can produce, never *read* from
   the request. See `app/services/signed_urls.py`.
 
-## Known issues — recorded, not yet fixed
-- **Byte-identical re-upload crashes the pipeline.** Suppliers resend invoices
-  all the time, so this will be hit in practice.
+  SECOND EXCEPTION, same reasoning: `POST /documents` also accepts a signed
+  `upload_token` (minted by `POST /documents/authorize`, which the BFF calls). It
+  exists because document bytes must not stream through Next.js and a browser
+  upload cannot carry the BFF secret. The token is bound to a *kind*, so an image
+  token cannot write and an upload token cannot read; it expires in minutes; and
+  a present-but-bad token is refused, never silently downgraded to the header path.
 
-  What happens now: `POST /documents` inserts the document row with
-  `sha256 = NULL`, returns 202, and the pipeline sets the hash later with an
-  UPDATE (`app/services/pipeline.py`). For a file this org has already
-  uploaded, that UPDATE violates `UNIQUE(org_id, sha256)` and raises
-  IntegrityError. The result is a 500 in the background task and an orphan
-  document row left with a NULL hash and no usable annotation.
+## Known issues — recorded
 
-  Correct behaviour: hash the bytes at upload, BEFORE inserting. If
-  `(org_id, sha256)` already exists, return the existing document — **200 with
-  the existing document id, not 202 and never 500** — and do not start a
-  second pipeline run. The constraint stays as the backstop for a race
-  between two concurrent identical uploads; that path should also resolve to
-  the existing row rather than surface the IntegrityError.
+FIXED, and worth remembering why:
+
+- **A byte-identical re-upload used to crash the pipeline** (IntegrityError on
+  `UNIQUE(org_id, sha256)`, a 500 in the background task, an orphan row). Fixed
+  2026-09-20: the bytes are hashed BEFORE anything is stored and a resend returns
+  the existing document with 200. A failed or stalled earlier attempt is retried
+  instead. See docs/ingestion.md, "The upload path".
+- **`POST /documents` had never worked end to end.** The handler wrote through a
+  yield-dependency session and then queued the pipeline; FastAPI >= 0.118 runs that
+  dependency's teardown (the commit) after the response and background tasks, so
+  the pipeline could not find the document. No test went through the HTTP path.
+  RULE: a handler that schedules background work must own its transaction and
+  commit before scheduling. `tests/test_upload.py::test_the_document_is_committed_
+  before_the_pipeline_is_started` probes from the pipeline's side.
+
+STILL OPEN:
+
+- **A stalled document is only detected by age.** A document with no annotation
+  after `STALLED_AFTER_S` (15 min) is shown as `stalled`; nothing retries it
+  automatically. Re-uploading the same file is the retry. This is the durable-queue
+  trade-off above, made visible rather than fixed.
+- **Arabic dates in an RTL PDF do not always ground.** MuPDF splits a date like
+  `2026-04-09` into separate words (`2026`, `04`, `09`) inside an RTL run, so no
+  word window matches the value and it gets no bounding box (seen on both
+  generated Arabic invoices, 2026-09-20). The value itself is unaffected.
+- **The UBL in generated test invoices is ZATCA-shaped, not certified.** Only a
+  real sample proves the parser against certified output (see samples/README.md).
 
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.

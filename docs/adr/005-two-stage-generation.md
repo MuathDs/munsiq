@@ -1,71 +1,83 @@
-# ADR 005 — Two-stage synthetic generation: records first, text second
+# ADR 005 — Two-stage generation of synthetic training data
 
-**Status:** Accepted for the dataset prototype · Superseded in the product by
+**Status:** Reconstructed, not authoritative · superseded in the product by
 [ADR 001](001-xml-first-extraction.md) and [ADR 002](002-schema-conditioned-prompting.md)
-· **Date:** 2026-09-19 (recorded; decided in the pre-Munsiq prototype)
+· **Date:** 2026-09-20
+
+> **Read this first.** The generator this ADR is about, `generate_data.py`, was
+> never committed and is not on disk — only its compiled bytecode survived, and
+> that has since been cleaned up. An earlier version of this page described its
+> internals in detail (that arithmetic was "computed, not generated", for
+> instance). None of that could be verified, so it has been removed. What follows
+> separates what the surviving artefacts **show** from what is **inferred**. If
+> you wrote the generator, please correct the inferred parts.
 
 ## Context
 
-No corpus of Saudi B2B invoices can be used for development. Real ones carry
-live VAT registrations, IBANs, prices and supplier relationships; they cannot go
-in a repository, and they cannot be pasted into a model prompt.
+Real Saudi B2B documents cannot be used for development: they carry live VAT
+registrations, IBANs, prices and supplier relationships, and cannot go in a
+repository or a model prompt. So the fine-tuning data for the original
+`munsiq-extractor` model had to be generated.
 
-So the training and test material had to be generated. The obvious approach —
-ask a model for "an invoice" and keep the prose — produces documents that read
-plausibly and do not add up: a VAT line that is not 15% of the subtotal, a total
-that matches neither, a VAT number of the wrong length. Data like that is worse
-than useless for a system whose entire job is arithmetic and structural
-validation, because it teaches the model that incoherent documents are normal
-and it gives the rules nothing honest to check against.
+## What the surviving evidence shows
 
-## Decision
+Verified on 2026-09-20 against `legacy/data/procurement_finetune.jsonl`:
 
-Generate in two stages, and never let the language model invent a number that
-another number depends on.
+* 500 records. Every one is `{"text": ..., "extracted_json": {...}}`.
+* Every `extracted_json` has **exactly the same five keys** — `document_type`,
+  `company_name`, `equipment_mentioned`, `total_value_sar`, `critical_dates`. One
+  key set across all 500.
+* `document_type` takes 10 values, **exactly 50 records each** — Purchase Order,
+  Maintenance Log, Work Order, LPO, Delivery Note, RFQ, Invoice, Warranty Claim,
+  Inspection Report, Service Report.
+* All 500 `text` fields contain Arabic; the first is colloquial Saudi Arabic
+  mixed with English terms ("centrifugal pump", "delivery date").
+* The original README describes records with "parallel English and Saudi-Arabic
+  fields plus a bilingual instruction/response pair".
 
-1. **Stage one — structured records.** Generate the *facts* as structured data:
-   quantities, unit prices, line amounts, subtotal, VAT, total, dates,
-   identifiers. Arithmetic is computed, not generated, so every record is
-   internally consistent by construction. The same stage decides the parallel
-   Arabic and English field values.
-2. **Stage two — rendering.** Derive the human-facing artefacts from the
-   record: the bilingual instruction/response pairs in the prototype, and in
-   this repository's test fixtures the printed PDF page and the UBL XML, both
-   rendered from one set of numbers.
+## What is inferred
 
-The test fixtures follow the same rule today: `build_ubl_xml` and the
-text-layer PDF are two renderings of one consistent invoice — two lines totalling
-45,320.00, 15% VAT of 6,798.00, payable 52,118.00. A fixture that is *wrong* is
-wrong deliberately, like the demo invoice whose printed total is 21,610.00 when
-the arithmetic says 21,160.00.
+A perfectly even 10 × 50 split does not happen by sampling. It happens when the
+label is **chosen first** and the text is written **from** it. So the likeliest
+shape of the pipeline is two stages:
 
-## Consequences
+1. **Decide the structured record** — the label, including which of the ten
+   document types this record is.
+2. **Render the record as text** — a document in the voice of a Saudi
+   procurement or maintenance user, so the JSON is ground truth for the text
+   rather than a guess extracted from it.
 
-**Good.** The validation rules can be tested against documents that genuinely
-add up, and against documents that genuinely do not, with the difference under
-our control rather than at the mercy of a sampler. Bilingual pairs describe the
-same facts instead of drifting apart. Nothing real is ever committed.
+I have not seen the code, so I do not know what stage one computed itself and
+what it delegated to a model, or whether any consistency (totals that add up,
+well-formed identifiers) was enforced. Treat both as unknown.
 
-**Bad / limits.**
+## Why that design is sound (the rationale, not a description of the code)
 
-* Synthetic documents are cleaner than reality: real invoices have stamps,
-  skewed scans, mixed scripts and creative layouts. Good numbers do not buy
-  good layout diversity.
-* The generator encodes an assumption of what an invoice looks like, so it
-  cannot surprise us the way a real corpus would.
-* Stage one's realism is bounded by what was specified — invented names and VAT
-  numbers are structurally valid, not real.
+Generating text and then asking a model to label it makes the label only as
+reliable as the labeller. Generating the label first and rendering text from it
+makes the label correct by construction, which is what a supervised extraction
+model needs. It also gives a balanced dataset for free.
 
-## Alternatives considered
+## Consequences that ARE observable
 
-* **One-shot generation of finished documents.** Rejected: incoherent
-  arithmetic, as above.
-* **Anonymising real invoices.** Rejected for this project: redaction that is
-  actually safe is hard, and the raw documents would still have to exist
-  somewhere in the working set.
+* **Five fixed columns were baked into the weights.** This is the property that
+  ended the approach: a sixth field meant regenerating data and retraining. See
+  [ADR 002](002-schema-conditioned-prompting.md).
+* The data is synthetic and, by these measurements, uniform: one schema, balanced
+  types, always Arabic-bearing. It cannot exercise real-world layout diversity,
+  scans, stamps or mixed scripts.
+* Nothing in it is real, which was the point.
+
+## The same idea, where it still lives
+
+The product's test fixtures follow the label-first principle at small scale:
+`backend/tests/fixtures.py` and `backend/scripts/make_test_invoices.py` build a
+UBL attachment and the printed page from **one** set of numbers, so they agree by
+construction. The deliberate errors are constructed too — the arithmetic-error
+invoice is built so its total is added up from the wrong VAT, and a test pins that
+exactly one rule fires. That is verified: `backend/tests/test_make_test_invoices.py`.
 
 ## See also
 
-`src/data_pipeline/generate_data.py` (legacy prototype),
-`docs/legacy-data-pipeline.md`, `backend/tests/fixtures.py`,
-`backend/scripts/seed_demo_documents.py`.
+`legacy/README.md`, `docs/legacy-data-pipeline.md`,
+`backend/tests/fixtures.py`, `backend/scripts/make_test_invoices.py`.
