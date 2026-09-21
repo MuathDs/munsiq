@@ -39,6 +39,9 @@ class ChatResult:
     content: str
     model: str
     latency_ms: int
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    finish_reason: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         """Parse the content as JSON, tolerating a fenced code block.
@@ -93,6 +96,7 @@ class OllamaClient:
             # Temperature 0: extraction is not a creative task, and a stable
             # output is what makes a regression measurable.
             "temperature": 0,
+            "seed": get_settings().INFERENCE_SEED,
             "stream": False,
         }
         if json_mode:
@@ -110,11 +114,15 @@ class OllamaClient:
                     response = client.post(f"{self.base_url}/chat/completions", json=payload)
                     response.raise_for_status()
                     body = response.json()
-                content = body["choices"][0]["message"]["content"]
-                return ChatResult(
-                    content=content,
+                choice = body["choices"][0]
+                usage = body.get("usage") or {}
+                result = ChatResult(
+                    content=choice["message"]["content"],
                     model=body.get("model", self.model),
                     latency_ms=int((time.monotonic() - started) * 1000),
+                    prompt_tokens=usage.get("prompt_tokens"),
+                    completion_tokens=usage.get("completion_tokens"),
+                    finish_reason=choice.get("finish_reason"),
                 )
             except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
                 last_error = exc
@@ -125,10 +133,46 @@ class OllamaClient:
                         extra={"attempt": attempt + 1, "backoff_s": round(backoff, 2)},
                     )
                     time.sleep(backoff)
+            else:
+                # Outside the try: a refusal is deterministic, so it is not retried.
+                _refuse_if_context_exhausted(result)
+                return result
 
         raise InferenceError(
             f"inference failed after {self.max_retries + 1} attempts: {last_error}"
         ) from last_error
+
+
+def _refuse_if_context_exhausted(result: ChatResult) -> None:
+    """Ollama truncates an over-long prompt silently and answers anyway.
+
+    The answer then comes from a document with its beginning cut off, which looks
+    exactly like a model that missed a field. The only trace is the token count
+    sitting at the window, so that is what is checked. Token counts are logged on
+    every call so a creeping prompt is visible before it reaches the limit.
+    """
+    num_ctx = get_settings().INFERENCE_NUM_CTX
+    used = (result.prompt_tokens or 0) + (result.completion_tokens or 0)
+    logger.info(
+        "inference.usage",
+        extra={
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "num_ctx": num_ctx,
+        },
+    )
+    if result.finish_reason == "length":
+        raise InferenceError(
+            "the model stopped at its length limit (finish_reason=length); the reply is incomplete"
+        )
+    if used >= num_ctx:
+        raise InferenceError(
+            f"prompt and reply used {used} tokens of a {num_ctx}-token context; the "
+            "server truncates silently at that point, so the model may not have seen "
+            "the start of the document. Raise the model's context and INFERENCE_NUM_CTX."
+        )
+    if used >= 0.8 * num_ctx:
+        logger.warning("inference.context_nearly_full", extra={"used": used, "num_ctx": num_ctx})
 
 
 def _with_images(text: str, images: list[bytes]) -> dict[str, Any]:

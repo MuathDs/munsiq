@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     # munsiq-extractor would defeat the whole design.
     INFERENCE_MODEL: str = "qwen2.5:7b-instruct"
     INFERENCE_TIMEOUT_S: float = 180.0
+
+    # Sent with every request. Greedy decoding (temperature 0) does not depend on
+    # it, so it changes nothing today; it is pinned so that turning sampling on
+    # later cannot make runs unrepeatable without anyone noticing.
+    INFERENCE_SEED: int = 0
+
+    # The context window the model server is ACTUALLY running with. This client
+    # cannot set it: Ollama's OpenAI-compatible endpoint ignores num_ctx (verified
+    # against Ollama 0.34.1). On this 4 GB GPU Ollama picks 4096 by itself; change
+    # it with a Modelfile or OLLAMA_CONTEXT_LENGTH, then change this to match. It
+    # exists so the client can refuse a reply whose prompt filled the window.
+    INFERENCE_NUM_CTX: int = 4096
     INFERENCE_MAX_RETRIES: int = 2
 
     # Vision path is opt-in. A VL model does not fit comfortably in 4GB, so the
