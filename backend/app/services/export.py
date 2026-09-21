@@ -21,11 +21,14 @@ text is untrusted input:
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Final
 
 from openpyxl import Workbook
@@ -47,7 +50,7 @@ from app.schemas.export import (
 from app.schemas.workspace import bbox_from_json, schema_fields_from_definition
 from app.services.normalize import has_arabic
 
-Cell = str | int | float | None
+Cell = str | int | float | Decimal | None
 
 COLUMNS: Final[tuple[str, ...]] = (
     "section",
@@ -90,6 +93,22 @@ class ExportNotConfirmedError(Exception):
         self.status = status
 
 
+class ExportBatchError(Exception):
+    """A batch that cannot be exported as a whole. Nothing is exported."""
+
+    def __init__(
+        self, missing: list[uuid.UUID], not_confirmed: list[tuple[uuid.UUID, str]]
+    ) -> None:
+        super().__init__(f"{len(missing)} missing, {len(not_confirmed)} not confirmed")
+        self.missing = missing
+        self.not_confirmed = not_confirmed
+
+
+EXPORTABLE_STATUSES: Final[frozenset[str]] = frozenset({"confirmed", "exported"})
+"""An annotation that has already been exported is still confirmed, and may be
+downloaded again in another format."""
+
+
 # --------------------------------------------------------------------------- #
 # Load
 # --------------------------------------------------------------------------- #
@@ -112,7 +131,7 @@ async def load_invoice(
     ).first()
     if header is None:
         raise ExportNotFoundError(str(annotation_id))
-    if header.status != "confirmed":
+    if header.status not in EXPORTABLE_STATUSES:
         raise ExportNotConfirmedError(header.status)
 
     definition = None
@@ -190,6 +209,78 @@ async def load_invoice(
             )
             for index in sorted(line_rows)
         ],
+    )
+
+
+async def load_batch(
+    session: AsyncSession, annotation_ids: list[uuid.UUID], *, now: datetime | None = None
+) -> list[MunsiqInvoiceV1]:
+    """Load several confirmed annotations, all or none.
+
+    Repeated ids are collapsed (order kept). If ANY id is unknown to this tenant or
+    not confirmed, nothing is returned and the error names every offender, so the
+    reviewer fixes the selection once rather than one refusal at a time.
+    """
+    invoices: list[MunsiqInvoiceV1] = []
+    missing: list[uuid.UUID] = []
+    not_confirmed: list[tuple[uuid.UUID, str]] = []
+    for annotation_id in dict.fromkeys(annotation_ids):
+        try:
+            invoices.append(await load_invoice(session, annotation_id, now=now))
+        except ExportNotFoundError:
+            missing.append(annotation_id)
+        except ExportNotConfirmedError as exc:
+            not_confirmed.append((annotation_id, exc.status))
+    if missing or not_confirmed:
+        raise ExportBatchError(missing, not_confirmed)
+    return invoices
+
+
+async def record_exports(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    invoices: list[MunsiqInvoiceV1],
+    *,
+    export_format: ExportFormat,
+    body: bytes,
+    batch_size: int = 1,
+) -> None:
+    """Write the audit row for each invoice and move it to 'exported'.
+
+    Export is a lifecycle state, not just a download: it is what tells the next
+    reviewer that this invoice has already left the system. Only 'confirmed'
+    moves; an annotation that was exported before keeps its status.
+    """
+    digest = hashlib.sha256(body).hexdigest()
+    for invoice in invoices:
+        await session.execute(
+            text(
+                "INSERT INTO exports (org_id, annotation_id, target, status, attempts, response) "
+                "VALUES (:org, :a, :target, 'completed', 1, CAST(:response AS jsonb))"
+            ),
+            {
+                "org": org_id,
+                "a": invoice.annotation_id,
+                "target": export_format,
+                "response": json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "format": export_format,
+                        "bytes": len(body),
+                        "sha256": digest,
+                        "fields": len(invoice.invoice),
+                        "line_items": len(invoice.line_items),
+                        "batch_size": batch_size,
+                    }
+                ),
+            },
+        )
+    await session.execute(
+        text(
+            "UPDATE annotations SET status = 'exported' "
+            "WHERE id = ANY(:ids) AND status = 'confirmed'"
+        ),
+        {"ids": [i.annotation_id for i in invoices]},
     )
 
 
@@ -316,6 +407,103 @@ def render_xlsx(invoice: MunsiqInvoiceV1) -> bytes:
     return buffer.getvalue()
 
 
+BATCH_INVOICES_SHEET: Final[str] = "Invoices"
+BATCH_LEADING_COLUMNS: Final[tuple[str, ...]] = (
+    "annotation_id",
+    "document_id",
+    "confirmed_at",
+    "model_version",
+    "has_embedded_ubl",
+)
+
+
+def render_batch_xlsx(invoices: list[MunsiqInvoiceV1], *, now: datetime | None = None) -> Rendered:
+    """One workbook for several invoices: a row per invoice and a row per line item.
+
+    A different shape from the single export, on purpose. That one is long (a row
+    per field, with provenance) because it is a contract for a machine; this is
+    wide (a column per field) because it is for a person who wants to sort and sum
+    a month of invoices. Values are the reviewed ones. Per-field provenance stays
+    in the single export.
+
+    Money is written as a number with two decimals; the Decimal is handed to the
+    workbook as-is, never through a float. Everything else is text, typed
+    explicitly so that a supplier called "=HYPERLINK(...)" is not a formula.
+    """
+    stamp = now or datetime.now(UTC)
+    header_keys = _ordered_keys(f for inv in invoices for f in inv.invoice)
+    line_keys = _ordered_keys(f for inv in invoices for item in inv.line_items for f in item.fields)
+
+    header_rows: list[dict[str, Cell]] = []
+    line_rows: list[dict[str, Cell]] = []
+    for invoice in invoices:
+        row: dict[str, Cell] = {
+            "annotation_id": str(invoice.annotation_id),
+            "document_id": str(invoice.document_id),
+            "confirmed_at": invoice.confirmed_at.isoformat() if invoice.confirmed_at else None,
+            "model_version": invoice.model_version,
+            "has_embedded_ubl": "true" if invoice.has_embedded_ubl else "false",
+        }
+        row.update({f.key: _cell(f) for f in invoice.invoice})
+        header_rows.append(row)
+        for item in invoice.line_items:
+            line: dict[str, Cell] = {
+                "annotation_id": str(invoice.annotation_id),
+                "row_index": item.row_index,
+            }
+            line.update({f.key: _cell(f) for f in item.fields})
+            line_rows.append(line)
+
+    header_columns = (*BATCH_LEADING_COLUMNS, *header_keys)
+    line_columns = ("annotation_id", "row_index", *line_keys)
+    workbook = Workbook()
+    sheet = workbook.active
+    if not isinstance(sheet, Worksheet):  # pragma: no cover - openpyxl invariant
+        raise TypeError("a new workbook always has an active worksheet")
+    sheet.title = BATCH_INVOICES_SHEET
+    _write_sheet(
+        sheet, header_columns, [{c: r.get(c) for c in header_columns} for r in header_rows]
+    )
+    _write_sheet(
+        workbook.create_sheet(LINE_ITEMS_SHEET),
+        line_columns,
+        [{c: r.get(c) for c in line_columns} for r in line_rows],
+    )
+
+    workbook.properties.title = "MunsiqInvoiceV1 batch"
+    custom_props = workbook.custom_doc_props  # type: ignore[attr-defined]
+    for name, value in {
+        "schema_version": SCHEMA_VERSION,
+        "exported_at": stamp.isoformat(),
+        "invoice_count": str(len(invoices)),
+    }.items():
+        custom_props.append(StringProperty(name=name, value=value))
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return Rendered(
+        body=buffer.getvalue(),
+        media_type=_MEDIA_TYPES["xlsx"],
+        filename=f"munsiq-invoices-v1-{len(invoices)}-{stamp:%Y%m%d}.xlsx",
+    )
+
+
+def _ordered_keys(fields: Any) -> list[str]:
+    """Field keys in the order first seen, which is schema order."""
+    return list(dict.fromkeys(f.key for f in fields))
+
+
+def _cell(field: ExportField) -> Cell | Decimal:
+    if field.value is None:
+        return None
+    if field.type == "decimal":
+        try:
+            return Decimal(field.value.replace(",", "")).quantize(Decimal("0.01"))
+        except InvalidOperation:
+            return field.value
+    return field.value
+
+
 def _metadata(invoice: MunsiqInvoiceV1) -> dict[str, str]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -329,6 +517,7 @@ def _metadata(invoice: MunsiqInvoiceV1) -> dict[str, str]:
 
 
 _RTL = Alignment(horizontal="right", readingOrder=2)
+MONEY_FORMAT: Final[str] = "#,##0.00"
 
 
 def _write_sheet(sheet: Worksheet, columns: tuple[str, ...], rows: list[dict[str, Cell]]) -> None:
@@ -338,7 +527,10 @@ def _write_sheet(sheet: Worksheet, columns: tuple[str, ...], rows: list[dict[str
     for row in rows:
         sheet.append([row[c] for c in columns])
         for cell in sheet[sheet.max_row]:
-            if isinstance(cell.value, str):
+            if isinstance(cell.value, Decimal):
+                # A real number, shown as money: 18400 would read as a count.
+                cell.number_format = MONEY_FORMAT
+            elif isinstance(cell.value, str):
                 # Always text. openpyxl infers a formula from a leading "=",
                 # and invoice text is untrusted.
                 cell.data_type = "s"

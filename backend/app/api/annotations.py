@@ -375,7 +375,8 @@ async def confirm_annotation(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Annotation not found.")
 
-    if row.status == "confirmed":
+    # An exported annotation IS confirmed; falling through here would reset it.
+    if row.status in ("confirmed", "exported"):
         return ConfirmResponse(annotation_id=annotation_id, status="confirmed")
 
     if row.status not in CONFIRMABLE_FROM:

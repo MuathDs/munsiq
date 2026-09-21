@@ -76,6 +76,11 @@ class Setup:
     org_id: uuid.UUID
     unconfirmed: uuid.UUID
     confirmed: uuid.UUID
+    lifecycle: uuid.UUID
+    """Confirmed and never exported: for the status transition."""
+    batch_a: uuid.UUID
+    batch_b: uuid.UUID
+    """Two more, for the multi-invoice workbook."""
 
 
 def client_as(org_id: uuid.UUID) -> AsyncClient:
@@ -144,10 +149,21 @@ async def setup(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[Setup
         base = fixtures.build_pdf_with_text_layer_and_ubl()
         unconfirmed = await _process(org_id, queue_id, _distinct_copy(base, "export-a"))
         confirmed = await _process(org_id, queue_id, _distinct_copy(base, "export-b"))
+        lifecycle = await _process(org_id, queue_id, _distinct_copy(base, "export-c"))
+        batch_a = await _process(org_id, queue_id, _distinct_copy(base, "export-d"))
+        batch_b = await _process(org_id, queue_id, _distinct_copy(base, "export-e"))
         async with client_as(org_id) as client:
-            response = await client.post(f"/api/v1/annotations/{confirmed}/confirm")
-        assert response.status_code == 200, response.text
-        yield Setup(org_id=org_id, unconfirmed=unconfirmed, confirmed=confirmed)
+            for annotation in (confirmed, lifecycle, batch_a, batch_b):
+                response = await client.post(f"/api/v1/annotations/{annotation}/confirm")
+                assert response.status_code == 200, response.text
+        yield Setup(
+            org_id=org_id,
+            unconfirmed=unconfirmed,
+            confirmed=confirmed,
+            lifecycle=lifecycle,
+            batch_a=batch_a,
+            batch_b=batch_b,
+        )
     finally:
         patch.undo()
         storage_mod._storage = previous
@@ -265,3 +281,139 @@ async def test_arabic_survives_the_real_export(setup: Setup) -> None:
         assert seller["label_ar"] == "اسم البائع"
         described = [r["value"] for r in rows if r["key"] == "line_description"]
         assert "صمام كروي 6 انش" in described
+
+
+# --------------------------------------------------------------------------- #
+# Export is a lifecycle state, not just a download
+# --------------------------------------------------------------------------- #
+async def _status(annotation_id: uuid.UUID) -> str:
+    async with get_sessionmaker()() as s:
+        return str(
+            await s.scalar(
+                sql("SELECT status FROM annotations WHERE id = :a"), {"a": annotation_id}
+            )
+        )
+
+
+async def test_a_successful_export_moves_the_annotation_to_exported(setup: Setup) -> None:
+    assert await _status(setup.lifecycle) == "confirmed"
+
+    async with client_as(setup.org_id) as client:
+        first = await client.get(f"/api/v1/annotations/{setup.lifecycle}/export")
+        assert first.status_code == 200
+        assert await _status(setup.lifecycle) == "exported"
+
+        # Still downloadable in the other formats, and the contract still says
+        # confirmed: the invoice is, it has merely also been exported.
+        second = await client.get(
+            f"/api/v1/annotations/{setup.lifecycle}/export", params={"format": "xlsx"}
+        )
+    assert second.status_code == 200
+    assert json.loads(first.content)["status"] == "confirmed"
+    assert await _status(setup.lifecycle) == "exported"
+
+
+async def test_a_refused_export_leaves_the_status_alone(setup: Setup) -> None:
+    async with client_as(setup.org_id) as client:
+        response = await client.get(f"/api/v1/annotations/{setup.unconfirmed}/export")
+
+    assert response.status_code == 409
+    assert await _status(setup.unconfirmed) == "to_review"
+
+
+async def test_confirming_an_exported_annotation_does_not_undo_the_export(
+    setup: Setup,
+) -> None:
+    async with client_as(setup.org_id) as client:
+        await client.get(f"/api/v1/annotations/{setup.confirmed}/export")
+        response = await client.post(f"/api/v1/annotations/{setup.confirmed}/confirm")
+
+    assert response.status_code == 200
+    assert await _status(setup.confirmed) == "exported"
+
+
+# --------------------------------------------------------------------------- #
+# One workbook for several invoices
+# --------------------------------------------------------------------------- #
+def _batch(*ids: uuid.UUID) -> dict[str, list[str]]:
+    return {"ids": [str(i) for i in ids]}
+
+
+async def test_a_batch_workbook_has_a_header_sheet_and_a_line_items_sheet(setup: Setup) -> None:
+    from openpyxl import load_workbook
+
+    async with client_as(setup.org_id) as client:
+        response = await client.post(
+            "/api/v1/annotations/export", json=_batch(setup.batch_a, setup.batch_b)
+        )
+
+    assert response.status_code == 200, response.text
+    assert "attachment" in response.headers["content-disposition"]
+    assert response.headers["content-disposition"].endswith('.xlsx"')
+    workbook = load_workbook(io.BytesIO(response.content))
+    assert workbook.sheetnames == ["Invoices", "Line Items"]
+
+    header = list(workbook["Invoices"].iter_rows(values_only=True))
+    assert header[0][:2] == ("annotation_id", "document_id")
+    assert {row[0] for row in header[1:]} == {str(setup.batch_a), str(setup.batch_b)}
+    seller = list(header[0]).index("seller_name")
+    # Arabic read back by opening the workbook, as a spreadsheet user would.
+    assert all(row[seller] == fixtures.SELLER_NAME for row in header[1:])
+
+    subtotal = workbook["Invoices"].cell(row=2, column=list(header[0]).index("subtotal") + 1)
+    assert subtotal.value == 45320, "money is a number, not text"
+    assert subtotal.number_format == "#,##0.00", "and it is shown as money"
+
+    lines = list(workbook["Line Items"].iter_rows(values_only=True))
+    assert lines[0][:2] == ("annotation_id", "row_index")
+    assert len(lines) == 1 + 2 * 2, "two invoices x two line items"
+    described = [row[list(lines[0]).index("line_description")] for row in lines[1:]]
+    assert described.count("صمام كروي 6 انش") == 2
+
+    assert await _status(setup.batch_a) == await _status(setup.batch_b) == "exported"
+    for annotation in (setup.batch_a, setup.batch_b):
+        recorded = await _export_rows(annotation)
+        assert [target for target, _, _ in recorded] == ["xlsx"]
+        assert recorded[0][2]["batch_size"] == 2
+
+
+async def test_one_unconfirmed_invoice_refuses_the_whole_batch(setup: Setup) -> None:
+    async with client_as(setup.org_id) as client:
+        response = await client.post(
+            "/api/v1/annotations/export", json=_batch(setup.confirmed, setup.unconfirmed)
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["not_confirmed"] == [{"id": str(setup.unconfirmed), "status": "to_review"}]
+    assert has_arabic(detail["message_ar"])
+    assert await _status(setup.unconfirmed) == "to_review"
+
+
+async def test_a_batch_is_tenant_scoped(setup: Setup) -> None:
+    async with client_as(uuid.uuid4()) as client:
+        response = await client.post("/api/v1/annotations/export", json=_batch(setup.confirmed))
+    assert response.status_code == 404
+
+
+async def test_a_batch_needs_at_least_one_id_and_a_bounded_number(setup: Setup) -> None:
+    async with client_as(setup.org_id) as client:
+        empty = await client.post("/api/v1/annotations/export", json={"ids": []})
+        huge = await client.post(
+            "/api/v1/annotations/export", json={"ids": [str(uuid.uuid4()) for _ in range(201)]}
+        )
+    assert empty.status_code == 422
+    assert huge.status_code == 422
+
+
+async def test_a_repeated_id_is_exported_once(setup: Setup) -> None:
+    from openpyxl import load_workbook
+
+    async with client_as(setup.org_id) as client:
+        response = await client.post(
+            "/api/v1/annotations/export", json=_batch(setup.confirmed, setup.confirmed)
+        )
+
+    assert response.status_code == 200
+    rows = list(load_workbook(io.BytesIO(response.content))["Invoices"].iter_rows(values_only=True))
+    assert len(rows) == 2, "a header and one invoice"
