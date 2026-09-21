@@ -52,6 +52,9 @@ class FieldSpec:
     required: bool = False
     guideline: str = ""
     confidence_threshold: float = 0.7
+    synonyms: tuple[str, ...] = ()
+    """Other ways a document prints this label ("Buyer", "المشتري"). Data, like the
+    labels: they live in the schema and are only used to notice a silent miss."""
 
     @classmethod
     def from_definition(cls, raw: dict[str, Any]) -> FieldSpec:
@@ -63,7 +66,22 @@ class FieldSpec:
             required=bool(raw.get("required", False)),
             guideline=str(raw.get("guideline", "")),
             confidence_threshold=float(raw.get("confidence_threshold", 0.7)),
+            synonyms=tuple(str(s) for s in raw.get("synonyms", []) if s),
         )
+
+    def search_labels(self) -> tuple[str, ...]:
+        """Every string whose presence on the page means this field is printed there.
+
+        The labels as written, the Arabic one without its "name" prefix, the English
+        one without a trailing qualifier ("Subtotal (excl. VAT)" is printed as
+        "Subtotal"), and the schema's synonyms.
+        """
+        found = [self.label_ar, self.label_en, *self.synonyms]
+        if self.label_ar.startswith("اسم "):
+            found.append(self.label_ar.removeprefix("اسم "))
+        if "(" in self.label_en:
+            found.append(self.label_en.split("(", 1)[0].strip())
+        return tuple(dict.fromkeys(label for label in found if label))
 
 
 def parse_schema(definition: dict[str, Any]) -> list[FieldSpec]:

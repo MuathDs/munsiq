@@ -33,11 +33,13 @@ from app.services.validation.rules.arithmetic import (
     grand_total_adds_up,
     line_item_amounts_are_consistent,
     line_total_matches_subtotal,
+    subtotal_is_not_the_total,
     vat_amount_matches_rate,
 )
 from app.services.validation.rules.provenance import (
     arabic_survived_the_xml,
     numeric_values_appear_on_the_page,
+    text_layer_is_intact,
     xml_and_model_agree,
 )
 from app.services.validation.rules.zatca import (
@@ -804,3 +806,86 @@ def test_a_model_value_absent_from_the_page_still_fails() -> None:
     findings = numeric_values_appear_on_the_page(ctx)
     assert findings
     assert findings[0].code == "OCR_SUBSTRING_MISSING"
+
+
+# --------------------------------------------------------------------------- #
+# SUBTOTAL_EQUALS_TOTAL
+#
+# Found on a marketplace "purchase summary": it states one amount, the
+# tax-INCLUSIVE total, and the model copied it into the subtotal as well.
+# --------------------------------------------------------------------------- #
+def test_subtotal_equal_to_total_with_no_vat_is_flagged() -> None:
+    findings = subtotal_is_not_the_total(
+        ctx(fields={"subtotal": "230.00", "total_amount": "230.00"})
+    )
+
+    assert findings is not None and len(findings) == 1
+    assert findings[0].field_key == "subtotal"
+    assert findings[0].severity is Severity.WARNING
+    assert not findings[0].passed
+
+
+def test_a_stated_vat_of_zero_is_a_zero_rated_invoice_not_a_copy() -> None:
+    fields = {"subtotal": "230.00", "vat_amount": "0.00", "total_amount": "230.00"}
+
+    assert subtotal_is_not_the_total(ctx(fields=fields)) == []
+
+
+def test_a_subtotal_below_the_total_passes() -> None:
+    fields = {"subtotal": "200.00", "vat_amount": "30.00", "total_amount": "230.00"}
+
+    assert subtotal_is_not_the_total(ctx(fields=fields)) == []
+
+
+def test_subtotal_rule_does_not_apply_without_both_amounts() -> None:
+    assert subtotal_is_not_the_total(ctx(fields={"total_amount": "230.00"})) is None
+    assert subtotal_is_not_the_total(ctx(fields={"subtotal": "230.00"})) is None
+
+
+def test_a_reviewers_own_subtotal_is_not_second_guessed() -> None:
+    fields = {
+        "subtotal": FieldView(key="subtotal", value="230.00", source="human"),
+        "total_amount": "230.00",
+    }
+
+    assert subtotal_is_not_the_total(ctx(fields=fields)) is None
+
+
+def test_a_warned_field_is_reported_for_the_pipeline_to_downgrade() -> None:
+    report = run_rules(ctx(fields={"subtotal": "230.00", "total_amount": "230.00"}))
+
+    assert report.warned_field_keys == {"subtotal"}
+    assert "SUBTOTAL_EQUALS_TOTAL" not in report.blockers
+
+
+# --------------------------------------------------------------------------- #
+# TEXT_LAYER_FRAGMENTED
+#
+# The first real invoice's text layer cut Arabic words apart after non-joining
+# letters: 40% of its Arabic tokens were single letters and none began with the
+# definite article. The model then misread or missed fields. This says so.
+# --------------------------------------------------------------------------- #
+CLEAN_ARABIC = (
+    "ملخص المشتريات البائع شركة الأفق للتجارة الإلكترونية المشتري سلمان بن ناصر الحربي " * 3
+)
+SHATTERED_ARABIC = (
+    "ملخص ا لمشتريا ت ا لبائع شركة ا لأفق للتجا رة "
+    "ا لإلكترونيا ت ا لمشتر ي سلما ن بن نا صر ا لحر بي "
+) * 3
+
+
+def test_a_shattered_arabic_text_layer_is_flagged() -> None:
+    findings = text_layer_is_intact(ctx(page_text=SHATTERED_ARABIC))
+
+    assert findings is not None and len(findings) == 1
+    assert findings[0].severity is Severity.WARNING
+    assert findings[0].field_key is None
+
+
+def test_ordinary_arabic_text_passes() -> None:
+    assert text_layer_is_intact(ctx(page_text=CLEAN_ARABIC)) == []
+
+
+def test_a_page_with_almost_no_arabic_is_not_judged() -> None:
+    assert text_layer_is_intact(ctx(page_text="Invoice SA-2026-0334 total 52118.00")) is None
+    assert text_layer_is_intact(ctx(page_text="ا ب ت ث")) is None

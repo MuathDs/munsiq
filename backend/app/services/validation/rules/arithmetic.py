@@ -192,6 +192,42 @@ def grand_total_adds_up(ctx: ValidationContext) -> list[RuleResult] | None:
 
 
 @rule(
+    "SUBTOTAL_EQUALS_TOTAL",
+    Severity.WARNING,
+    message_ar="المجموع قبل الضريبة يساوي الإجمالي ولم تُذكر ضريبة.",
+    message_en="The subtotal equals the total and no VAT is stated.",
+)
+def subtotal_is_not_the_total(ctx: ValidationContext) -> list[RuleResult] | None:
+    """A subtotal identical to the total, with no VAT, is probably the total copied.
+
+    Seen on a marketplace purchase summary: it prints ONE amount, the tax-inclusive
+    total, and the model filled the subtotal with it too. A stated VAT of zero is
+    a different thing (a zero-rated invoice really does have subtotal == total), so
+    only an absent VAT counts. A warning, not a blocker: the reviewer decides.
+    """
+    entry = ctx.fields.get(SUBTOTAL)
+    subtotal, total = ctx.amount(SUBTOTAL), ctx.amount(TOTAL_AMOUNT)
+    if subtotal is None or total is None or (entry is not None and entry.from_human):
+        return None
+    if ctx.value(VAT_AMOUNT) is not None or not close_enough(subtotal, total):
+        return []
+    return [
+        failure(
+            "SUBTOTAL_EQUALS_TOTAL",
+            message_ar=(
+                f"المجموع قبل الضريبة ({money(subtotal)}) يساوي الإجمالي ({money(total)}) "
+                "ولم تُذكر ضريبة؛ غالباً هو الإجمالي شامل الضريبة."
+            ),
+            message_en=(
+                f"The subtotal ({money(subtotal)}) equals the total ({money(total)}) and "
+                "no VAT is stated: it is probably the tax-inclusive total, not a subtotal."
+            ),
+            field_key=SUBTOTAL,
+        )
+    ]
+
+
+@rule(
     "NEGATIVE_AMOUNT",
     Severity.ERROR,
     message_ar="الفاتورة تحتوي على مبلغ سالب.",

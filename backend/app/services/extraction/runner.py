@@ -24,6 +24,7 @@ from typing import Any
 
 from app.services.extraction.client import InferenceClient, InferenceError
 from app.services.extraction.grounding import ground_value
+from app.services.extraction.labels import label_present
 from app.services.extraction.prompts import (
     SUSPICIOUS_KEY,
     SYSTEM_PROMPT,
@@ -137,14 +138,23 @@ def run_extraction(
             continue
 
         if model_value is None:
-            # A correct null. Persisted deliberately — see the module docstring.
+            # Persisted deliberately either way — see the module docstring. But a
+            # null is only CORRECT if the field is absent. If its label is printed
+            # on the page the model missed it, and a miss that shows up green is
+            # worse than a visible error.
+            printed_as = label_present(spec.search_labels(), document_text)
+            if printed_as is not None:
+                logger.warning(
+                    "extraction.silent_miss",
+                    extra={"field_key": spec.key, "label": printed_as},
+                )
             result.values.append(
                 ExtractedValue(
                     field_key=spec.key,
                     value=None,
                     source="vlm",
-                    confidence=1.0,
-                    validation_state="auto_validated",
+                    confidence=0.0 if printed_as else 1.0,
+                    validation_state="review_suggested" if printed_as else "auto_validated",
                 )
             )
             continue

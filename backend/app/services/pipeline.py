@@ -250,6 +250,13 @@ async def _process(
             # An unresolved error freezes the field: the confirm endpoint
             # refuses while any blocking state remains.
             value.validation_state = "blocking"
+        elif (
+            value.field_key in report.warned_field_keys
+            and value.validation_state == "auto_validated"
+        ):
+            # A warning does not stop confirmation, but it must not leave the
+            # field looking settled either.
+            value.validation_state = "review_suggested"
 
     # ---------------------------------------------------------------- #
     # 5. Persist

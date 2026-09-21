@@ -83,10 +83,12 @@ async def revalidate_annotation(
             "UPDATE extracted_fields SET validation_state = CASE "
             "  WHEN field_key = ANY(:blocking) THEN 'blocking' "
             "  WHEN validation_state = 'blocking' THEN 'review_suggested' "
+            "  WHEN field_key = ANY(:warned) AND validation_state = 'auto_validated' "
+            "    THEN 'review_suggested' "
             "  ELSE validation_state END "
             "WHERE annotation_id = :a"
         ),
-        {"a": annotation_id, "blocking": list(blocking)},
+        {"a": annotation_id, "blocking": list(blocking), "warned": list(report.warned_field_keys)},
     )
     await session.execute(
         sql("UPDATE annotations SET blockers = CAST(:b AS jsonb), automated = :auto WHERE id = :a"),

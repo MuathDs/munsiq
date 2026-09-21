@@ -222,3 +222,53 @@ def _encoding_finding(key: str, kind: str, value: str = "") -> RuleResult:
         ),
         field_key=key,
     )
+
+
+MIN_ARABIC_TOKENS_TO_JUDGE = 20
+"""Fewer than this and a few short words would decide the verdict."""
+
+SHATTERED_SINGLE_LETTER_SHARE = 0.25
+"""Real Arabic has a few one-letter words. A quarter of them is not real."""
+
+ARTICLE_SHARE_OF_REAL_TEXT = 0.05
+"""In ordinary Arabic well over 5% of tokens begin with the definite article."""
+
+
+@rule(
+    "TEXT_LAYER_FRAGMENTED",
+    Severity.WARNING,
+    message_ar="نص الصفحة العربي مجزّأ إلى أحرف منفصلة، وقد لا تكون القراءة موثوقة.",
+    message_en="The page's Arabic text is split into fragments, so this reading may be unreliable.",
+)
+def text_layer_is_intact(ctx: ValidationContext) -> list[RuleResult] | None:
+    """Detect a text layer whose Arabic words have been cut apart.
+
+    Found on the first real invoice: the layer split words after non-joining
+    letters, so 40% of its Arabic tokens were single letters and none began with
+    the definite article. A language model handed that text loses its own field
+    labels and either returns null or mixes one party's value into another's,
+    with no sign that anything went wrong. This is the sign.
+
+    Both signatures are required, because either alone occurs in healthy text.
+    """
+    tokens = [t for t in ctx.page_text.split() if has_arabic(t)]
+    if len(tokens) < MIN_ARABIC_TOKENS_TO_JUDGE:
+        return None
+    single = sum(1 for t in tokens if len(t) == 1) / len(tokens)
+    article = sum(1 for t in tokens if t.startswith("ال")) / len(tokens)
+    if single < SHATTERED_SINGLE_LETTER_SHARE or article >= ARTICLE_SHARE_OF_REAL_TEXT:
+        return []
+    return [
+        failure(
+            "TEXT_LAYER_FRAGMENTED",
+            message_ar=(
+                f"{single:.0%} من الكلمات العربية في نص الصفحة حرف واحد، ولا توجد كلمات "
+                "تبدأ بأداة التعريف؛ يبدو أن الكلمات مقطّعة. راجع الحقول مع الصفحة."
+            ),
+            message_en=(
+                f"{single:.0%} of the page's Arabic words are single letters and none "
+                "begin with the definite article: the words look cut apart. Check the "
+                "fields against the page."
+            ),
+        )
+    ]

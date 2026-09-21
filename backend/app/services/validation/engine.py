@@ -284,6 +284,15 @@ class ValidationReport:
         return {r.field_key for r in self.results if r.is_blocking and r.field_key}
 
     @property
+    def warned_field_keys(self) -> set[str]:
+        """Fields a non-blocking warning is about: worth a second look, not a stop."""
+        return {
+            r.field_key
+            for r in self.results
+            if r.severity is Severity.WARNING and not r.passed and r.field_key
+        }
+
+    @property
     def is_confirmable(self) -> bool:
         return not self.blockers
 

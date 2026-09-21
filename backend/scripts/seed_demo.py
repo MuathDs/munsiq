@@ -52,6 +52,7 @@ INVOICE_SCHEMA: dict[str, object] = {
             "type": "date",
             "label_en": "Issue date",
             "label_ar": "تاريخ الإصدار",
+            "synonyms": ["Date", "Invoice date", "التاريخ", "تاريخ الفاتورة"],
             "required": True,
             "confidence_threshold": 0.9,
             "guideline": (
@@ -65,6 +66,7 @@ INVOICE_SCHEMA: dict[str, object] = {
             "type": "string",
             "label_en": "Seller name",
             "label_ar": "اسم البائع",
+            "synonyms": ["Seller", "Supplier", "Sold by", "البائع", "المورد"],
             "required": True,
             "confidence_threshold": 0.85,
             "guideline": "Legal name of the supplier issuing the invoice.",
@@ -87,6 +89,15 @@ INVOICE_SCHEMA: dict[str, object] = {
             "type": "string",
             "label_en": "Buyer name",
             "label_ar": "اسم المشتري",
+            "synonyms": [
+                "Buyer",
+                "Customer",
+                "Bill to",
+                "Sold to",
+                "المشتري",
+                "العميل",
+                "اسم العميل",
+            ],
             "required": False,
             "confidence_threshold": 0.85,
             "guideline": "Legal name of the customer being invoiced.",
@@ -108,9 +119,23 @@ INVOICE_SCHEMA: dict[str, object] = {
             "type": "decimal",
             "label_en": "Subtotal (excl. VAT)",
             "label_ar": "المجموع قبل الضريبة",
+            "synonyms": [
+                "Subtotal",
+                "Total before VAT",
+                "Taxable amount",
+                "المجموع الفرعي",
+                "الإجمالي قبل الضريبة",
+                "المبلغ الخاضع للضريبة",
+            ],
             "required": True,
             "confidence_threshold": 0.9,
-            "guideline": "Total before VAT. Digits only, keep the decimal point.",
+            "guideline": (
+                "The amount EXCLUDING VAT: the taxable amount, before any tax is added. "
+                "If the document states only ONE amount and it is a tax-inclusive total "
+                "(for example a purchase summary, or a line such as 'total including "
+                "VAT'), the subtotal is null — never copy the total into it. "
+                "Digits only, keep the decimal point."
+            ),
         },
         {
             "key": "vat_amount",
@@ -126,9 +151,16 @@ INVOICE_SCHEMA: dict[str, object] = {
             "type": "decimal",
             "label_en": "Total (incl. VAT)",
             "label_ar": "الإجمالي شامل الضريبة",
+            "synonyms": [
+                "Grand total",
+                "Total due",
+                "Amount due",
+                "الإجمالي المستحق",
+                "المجموع الكلي",
+            ],
             "required": True,
             "confidence_threshold": 0.9,
-            "guideline": "Grand total payable, including VAT.",
+            "guideline": "Grand total payable, INCLUDING VAT. Digits only, keep the decimal point.",
         },
         {
             "key": "currency",
@@ -144,6 +176,7 @@ INVOICE_SCHEMA: dict[str, object] = {
             "type": "string",
             "label_en": "Purchase order number",
             "label_ar": "رقم أمر الشراء",
+            "synonyms": ["Purchase order", "PO number", "أمر شراء"],
             "required": False,
             "confidence_threshold": 0.8,
             "guideline": (
