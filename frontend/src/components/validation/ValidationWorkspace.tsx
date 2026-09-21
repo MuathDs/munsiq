@@ -18,7 +18,15 @@
  * summarise the document, so they sit next to its name and open on demand.
  */
 
-import { CircleCheck, FileText, Keyboard, Languages, Loader2, TriangleAlert, X } from "lucide-react";
+import {
+  ArrowLeft,
+  CircleCheck,
+  Keyboard,
+  Languages,
+  Loader2,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -318,9 +326,15 @@ function Header({
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-4 border-b border-line bg-sidebar px-6">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-accent/15 text-accent-strong">
-        <FileText size={18} aria-hidden />
-      </span>
+      {/* The way back. The workspace sits outside the app shell so it can own the
+          whole viewport, which means it has no sidebar to leave by. */}
+      <Link
+        href={`/${locale}/dashboard`}
+        className="flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] bg-accent/15 px-3 text-[12px] font-semibold text-accent-strong transition-colors hover:bg-accent/25"
+      >
+        <ArrowLeft size={16} aria-hidden className="rtl:-scale-x-100" />
+        {t.nav.dashboard}
+      </Link>
 
       <div className="min-w-0">
         <p className="text-[11px] font-medium leading-4 text-ink-faint">{t.workspace.title}</p>
