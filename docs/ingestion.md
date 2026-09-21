@@ -46,6 +46,48 @@ page is a hallucination signal.
 
 Boxes are normalized floats 0.0–1.0 throughout, never pixels.
 
+## Reading order
+
+A text layer is a content stream, not a picture. What comes out is only as ordered
+as the producer wrote it, and two things went wrong on the first real invoice (a
+marketplace B2C receipt):
+
+**Arabic words in visual order.** A producer that draws a right-to-left line from
+its left end writes the words to the stream leftmost-first. MuPDF puts each on a
+line of its own, so a printed "شركة حلول نور" was extracted as "نور حلول شركة" —
+and grounding scored it low, because the words of a window no longer read as the
+value. Grouping by MuPDF's own lines cannot fix this, so `_reading_order` in
+`app/services/pagetext.py` works from position:
+
+1. Fragments (MuPDF's lines) that contain Arabic are cut at wide gaps and fused
+   with their neighbours where the gap is at most **half a line height**. A word
+   space is about a quarter of one; the padding between two table cells is more.
+2. Each row containing Arabic is ordered by x: an Arabic run right to left, and —
+   in a right-to-left page — the runs themselves right to left.
+3. Left-to-right runs (numbers, dates, Latin words) keep the stream's order.
+
+The direction of a mixed row comes from the **page**, by which script has more
+words. "Seller:" at the left of an Arabic name is a label followed by its value on
+an English invoice and a value followed by its label on an Arabic one; the pixels
+are the same. It matters because `pages.text` is flat, and a value that precedes
+its label reads as the previous field's.
+
+An English page is untouched: rows are only fused where Arabic is involved, and the
+six generated invoices read identically before and after. Ordering by position
+rather than reversing whatever came out is what keeps a producer that already
+wrote logical order from being reversed twice.
+
+**A value wrapped after a hyphen.** "SA7KXWTPB-" over "LQP3081947" is one invoice
+number. `join_words` joins them without a space, and grounding uses the same
+function, so the value still finds its box (each half keeps its own rectangle).
+The rule is narrow on purpose, because a wrong join glues two fields together: the
+hyphen must follow a letter or digit, the next word must start with one and must
+not be a label ending in a colon, and it must sit directly below.
+
+Tests: `tests/test_pagetext_order.py`. The fixtures reproduce the mechanism
+(per-glyph positioned Arabic words in either stream order); the real PDF is
+personal data and is not in the repository.
+
 ## The Arabic OCR gap — known, and made loud
 
 The OCR engine is **RapidOCR** (ONNX Runtime). It was chosen because it is the

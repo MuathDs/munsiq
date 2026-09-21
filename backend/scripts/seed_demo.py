@@ -10,9 +10,11 @@ Nothing in the codebase hardcodes these keys.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import uuid
 from pathlib import Path
+from typing import cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,7 +22,14 @@ from sqlalchemy import text as sql
 
 from app.db.base import get_sessionmaker
 
-DEMO_ORG_NAME = "Munsiq Demo — منصق للعرض"
+DEMO_ORG_NAME = "Munsiq Demo — منسق للعرض"
+
+# The name this organization was first seeded under, with the app name misspelt
+# (منصق for منسق). The organization is found BY NAME, so without this a
+# database seeded before the fix would get a second demo organization and lose
+# its documents. It is renamed in place instead, keeping its id, which is what
+# MUNSIQ_ORG_ID points at.
+MISSPELT_DEMO_ORG_NAME = "Munsiq Demo — منصق للعرض"
 
 INVOICE_SCHEMA: dict[str, object] = {
     "name": "Saudi tax invoice",
@@ -173,10 +182,22 @@ INVOICE_SCHEMA: dict[str, object] = {
     ],
 }
 
+FIELD_COUNT = len(cast("list[object]", INVOICE_SCHEMA["fields"]))
+
 
 async def main() -> int:
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session, session.begin():
+        renamed = await session.scalar(
+            sql(
+                "UPDATE organizations SET name = :new WHERE name = :old "
+                "AND NOT EXISTS (SELECT 1 FROM organizations WHERE name = :new) "
+                "RETURNING id"
+            ),
+            {"new": DEMO_ORG_NAME, "old": MISSPELT_DEMO_ORG_NAME},
+        )
+        if renamed is not None:
+            print(f"renamed organization {renamed} to {DEMO_ORG_NAME!r}")
         org_id = await session.scalar(
             sql("SELECT id FROM organizations WHERE name = :n"), {"n": DEMO_ORG_NAME}
         )
@@ -205,30 +226,41 @@ async def main() -> int:
             )
             print(f"created queue {queue_id}")
 
-        existing = await session.scalar(
-            sql("SELECT max(version) FROM extraction_schemas WHERE queue_id = :q"),
-            {"q": queue_id},
-        )
-        version = (existing or 0) + 1
-        schema_id = uuid.uuid4()
-        await session.execute(
-            sql(
-                "INSERT INTO extraction_schemas (id, org_id, queue_id, version, definition) "
-                "VALUES (:id, :o, :q, :v, CAST(:d AS jsonb))"
-            ),
-            {
-                "id": schema_id,
-                "o": org_id,
-                "q": queue_id,
-                "v": version,
-                "d": __import__("json").dumps(INVOICE_SCHEMA, ensure_ascii=False),
-            },
-        )
+        latest = (
+            await session.execute(
+                sql(
+                    "SELECT id, version, definition FROM extraction_schemas "
+                    "WHERE queue_id = :q ORDER BY version DESC LIMIT 1"
+                ),
+                {"q": queue_id},
+            )
+        ).first()
+        # Re-running must not mint a version per run: a version is a claim that the
+        # definition CHANGED, and the Templates page lists every one of them.
+        if latest is not None and latest.definition == INVOICE_SCHEMA:
+            schema_id, version = latest.id, latest.version
+            print(f"extraction schema v{version} is current ({FIELD_COUNT} fields)")
+        else:
+            version = (latest.version if latest else 0) + 1
+            schema_id = uuid.uuid4()
+            await session.execute(
+                sql(
+                    "INSERT INTO extraction_schemas (id, org_id, queue_id, version, definition) "
+                    "VALUES (:id, :o, :q, :v, CAST(:d AS jsonb))"
+                ),
+                {
+                    "id": schema_id,
+                    "o": org_id,
+                    "q": queue_id,
+                    "v": version,
+                    "d": json.dumps(INVOICE_SCHEMA, ensure_ascii=False),
+                },
+            )
+            print(f"created extraction schema v{version} ({FIELD_COUNT} fields)")
         await session.execute(
             sql("UPDATE queues SET active_schema_id = :s WHERE id = :q"),
             {"s": schema_id, "q": queue_id},
         )
-        print(f"created extraction schema v{version} ({len(INVOICE_SCHEMA['fields'])} fields)")
 
     print()
     print("ORG_ID for API calls:", org_id)

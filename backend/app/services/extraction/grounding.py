@@ -74,7 +74,7 @@ def ground_value(value: str, pages: list[PageText], *, threshold: int | None = N
         for size in range(1, min(target_len + 2, 8) + 1):
             for start in range(0, max(0, len(page.words) - size) + 1):
                 window = page.words[start : start + size]
-                candidate = normalize_for_match(" ".join(w.text for w in window))
+                candidate = normalize_for_match(page.join_words(window))
                 if not candidate:
                     continue
                 score = fuzz.ratio(needle, candidate)

@@ -280,3 +280,91 @@ def build_pdf_with_text_layer_and_ubl() -> bytes:
     buffer = BytesIO()
     writer.write(buffer)
     return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Reading order: what a content stream can do to a right-to-left line
+# --------------------------------------------------------------------------- #
+
+ARIAL: Final = r"C:\Windows\Fonts\arial.ttf"
+_FONT_SIZE: Final = 12.0
+
+Op = tuple[str, float, float]
+"""One text-drawing operation: ``(text, x, y)``. A list of them is a content
+stream, and its ORDER is what a text extractor reads."""
+
+
+def text_width(text: str) -> float:
+    return float(pymupdf.Font(fontfile=ARIAL).text_length(text, fontsize=_FONT_SIZE))
+
+
+def _has_arabic_letters(token: str) -> bool:
+    return any("؀" <= ch <= "ۿ" for ch in token)
+
+
+def rtl_word(word: str, *, right: float, y: float) -> list[Op]:
+    """One Arabic word drawn glyph by glyph from its right edge leftwards.
+
+    Glyphs are positioned individually, in logical order, which is how a producer
+    that shapes and positions text itself writes an RTL run.
+    """
+    ops: list[Op] = []
+    cursor = right
+    for glyph in word:
+        cursor -= text_width(glyph)
+        ops.append((glyph, cursor, y))
+    return ops
+
+
+def visual_line(tokens: list[str], *, left: float = 72.0, y: float = 120.0) -> list[list[Op]]:
+    """One printed line, given LEFT TO RIGHT exactly as it looks on the page.
+
+    Returns one operation list per token, leftmost first. An Arabic token is
+    drawn right to left inside its own width; anything else is a single
+    left-to-right operation. Every token ends with the space glyph that separates
+    it from the next one, as a real producer writes it — without one MuPDF fuses
+    neighbouring words into a single word.
+    """
+    line: list[list[Op]] = []
+    cursor = left
+    for token in tokens:
+        width = text_width(token)
+        if _has_arabic_letters(token):
+            ops = rtl_word(token, right=cursor + width, y=y)
+        else:
+            ops = [(token, cursor, y)]
+        cursor += width
+        ops.append((" ", cursor, y))
+        cursor += text_width(" ")
+        line.append(ops)
+    return line
+
+
+def build_pdf_from_ops(ops: list[Op]) -> bytes:
+    """A one-page PDF drawing each operation in the order given."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    for text, x, y in ops:
+        page.insert_text((x, y), text, fontsize=_FONT_SIZE, fontfile=ARIAL, fontname="F0")
+    buffer = BytesIO()
+    doc.save(buffer)
+    doc.close()
+    return buffer.getvalue()
+
+
+def flatten(tokens: list[list[Op]]) -> list[Op]:
+    return [op for token in tokens for op in token]
+
+
+def visual_stream(line: list[list[Op]]) -> list[Op]:
+    """Stream order of a producer that draws a line left to right.
+
+    The leftmost token arrives first, so an Arabic phrase reaches the extractor
+    in visual order — the last word read comes first.
+    """
+    return flatten(line)
+
+
+def logical_stream(line: list[list[Op]]) -> list[Op]:
+    """Stream order of a producer that writes the first-read (rightmost) token first."""
+    return flatten(list(reversed(line)))

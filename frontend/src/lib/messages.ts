@@ -280,7 +280,7 @@ const en = {
 export type Messages = typeof en;
 
 const ar: Messages = {
-  appName: "منصق",
+  appName: "منسق",
   workspace: {
     title: "مساحة التحقق",
     document: "المستند",

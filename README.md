@@ -1,4 +1,4 @@
-# Munsiq — منصق
+# Munsiq — منسق
 
 Document information extraction for Saudi tax invoices, Arabic and English, for
 the **receiving** side of ZATCA Phase 2.
@@ -98,7 +98,7 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **343 passed, 1 skipped, 1 xfailed — 18m16s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-20. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **361 passed, 1 skipped, 1 xfailed — 17m42s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-21. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **14** (10 blocking errors, 4 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-20 |
 | Validation coverage | **100% statements and branches** — 445 statements, 148 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 97 tests, 23.3 s under coverage instrumentation and **1.6 s** without it (the rules are pure functions) |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |

@@ -21,8 +21,9 @@ by an Application Control policy. Install into the venv only:
 ## Scope
 Portfolio project, not a product. Build phases 1, 2, a minimal 3+4, 5, and 7 of
 the execution plan. Do NOT build 3.5, 5.5, 8, 9, 10 or 11 unless asked.
-`document_parts` stays in the Phase 2 schema even though nothing populates it —
-two lines now, no migration later.
+`document_parts` stays in the Phase 2 schema. Today the pipeline writes exactly one
+part per document — index 0, `doc_type='invoice'`, spanning every page — so nothing
+splits a file into documents (see "A PDF can hold more than one document", below).
 
 ## Deferred — not skipped
 - **Dedicated low-privilege application role.** Still deferred, but the gap it
@@ -56,6 +57,21 @@ two lines now, no migration later.
   `process_document(org_id, document_id)` is a plain coroutine, so moving to arq
   is a call-site change rather than a rewrite. Revisit before anything resembling
   real volume.
+
+- **ZATCA QR as a "Step Zero" for simplified (B2C) invoices.** Not built; recorded
+  because it is the obvious next thing. A B2C simplified invoice has no UBL
+  attachment, so Step Zero finds nothing and the model runs — but the invoice must
+  still carry the mandatory ZATCA TLV QR, printed as an IMAGE. Decoding it gives
+  seller name, TRN, timestamp, total and VAT total (tags 1-5) without the model,
+  the same way the embedded UBL does for B2B. Seen on the first real invoice (a
+  marketplace B2C receipt, 2026-09-21).
+
+  What already exists: `decode_zatca_qr` in `app/services/ubl.py` parses the TLV,
+  and `rules/zatca.py` already cross-checks tags 4 and 5 against the fields. What
+  is missing is only getting the payload out of the page image, which needs a QR
+  decoder that loads under this machine's WDAC policy (check before choosing one:
+  it is the same constraint that shaped the OCR choice). Until then a simplified
+  invoice is read by the model and the QR is not used as evidence.
 
 - **Arabic OCR for image-only pages.** The OCR engine that loads under this
   machine's WDAC policy (RapidOCR) has zero Arabic characters in its recogniser,
@@ -109,8 +125,43 @@ FIXED, and worth remembering why:
   RULE: a handler that schedules background work must own its transaction and
   commit before scheduling. `tests/test_upload.py::test_the_document_is_committed_
   before_the_pipeline_is_started` probes from the pipeline's side.
+- **Arabic words came out in reverse order** (found on the first real invoice, a
+  marketplace B2C receipt; fixed 2026-09-21). A vendor printed "شركة حلول نور للتسويق
+  الإلكتروني" reached the model as "…نور حلول شركة". A text layer is a content
+  stream, and a producer that draws an RTL line from its left end writes the words
+  in visual order; MuPDF then puts each on a line of its own, so grouping by its
+  lines cannot fix it. `pagetext._reading_order` regroups words into rows by
+  position and orders each Arabic row from the x coordinates, so a producer that
+  already wrote logical order is not reversed twice. Three limits, all on purpose:
+  a row is only fused where Arabic is involved (an English page is byte-identical
+  to before), the gap that fuses fragments is half a line height (a looser one
+  fused adjacent table headers on the generated Arabic invoices), and left-to-right
+  runs keep the stream's order. Whether a mixed row reads label-first or
+  label-last follows the direction of the PAGE, not the row, because the text is
+  flat and a value that precedes its label reads as the previous field's.
+  `tests/test_pagetext_order.py`; the fixtures reproduce the mechanism because the
+  real PDF is personal data and is not in the repository.
+- **A value wrapped after a hyphen was rejoined with a space** ("SA7KXWTPB-" /
+  "LQP3081947" read as "SA7KXWTPB- LQP3081947"; same invoice, fixed 2026-09-21).
+  `pagetext.join_words` now joins without one, and grounding uses the same
+  function so the joined value still finds its box. Deliberately narrow: the hyphen
+  must follow a letter or digit, the next line must sit directly below and start
+  with one, and must not be a label ending in a colon. Each half keeps its own
+  word box.
 
 STILL OPEN:
+
+- **A PDF can hold more than one document.** The first real invoice was one file
+  with two: a marketplace purchase summary on page 1 and the Noor tax
+  invoice on page 2, with different totals. The pipeline treats a file as one document —
+  `document_parts` gets a single part spanning every page — and the model is handed
+  all pages as one prompt, so which total it returns is a matter of which page it
+  weighs more. It happened to pick page 2 (the right one); nothing
+  guarantees that, and nothing tells the reviewer a second document was there.
+  This is real-world evidence for the deferred `document_parts` work (splitting a
+  file into parts, one annotation each). NOT built — recorded, per the scope
+  rules. Until it is, a multi-document file is a known way to get a confidently
+  wrong total.
 
 - **A stalled document is only detected by age.** A document with no annotation
   after `STALLED_AFTER_S` (15 min) is shown as `stalled`; nothing retries it
