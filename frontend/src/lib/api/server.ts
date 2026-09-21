@@ -167,6 +167,14 @@ export function exportAnnotation(id: string, format: string): Promise<Response> 
 }
 
 /**
+ * One Excel workbook for several confirmed annotations, all or nothing. The ids
+ * are what to export, not who is asking: the tenant is still this server's.
+ */
+export function exportBatch(ids: string[]): Promise<Response> {
+  return callRaw("/annotations/export", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+/**
  * Page images are served by the backend against a short-lived signed token, so
  * their bytes never pass through Next.js — see CLAUDE.md, "Do not stream
  * document bytes through Next.js".

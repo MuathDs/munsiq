@@ -41,6 +41,7 @@ import { interpolate, messagesFor, type Messages } from "@/lib/messages";
 
 import { BlockerList } from "./BlockerList";
 import { DocumentPane } from "./DocumentPane";
+import { ExportMenu } from "./ExportMenu";
 import { FieldPane } from "./FieldPane";
 import { labelFor, orderFields } from "./fieldModel";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -171,7 +172,7 @@ export function ValidationWorkspace({
     window.addEventListener("mouseup", onUp);
   }, [applySplit, isArabic]);
 
-  const confirmed = state.status === "confirmed";
+  const confirmed = isConfirmed(state.status);
 
   return (
     <div className="flex h-dvh flex-col bg-bg">
@@ -182,6 +183,7 @@ export function ValidationWorkspace({
         t={t}
         blockingCount={blockingCount}
         onConfirm={() => void confirm()}
+        onExported={() => dispatch({ type: "export:ok" })}
         onHelp={() => setShowHelp(true)}
       />
 
@@ -287,8 +289,14 @@ function headerValue(fields: ExtractedField[], key: string): string | null {
   return field ? currentValue(field) : null;
 }
 
+/** An exported invoice is still a confirmed one: it has merely also left the system. */
+function isConfirmed(status: string): boolean {
+  return status === "confirmed" || status === "exported";
+}
+
 const STATUS_TONE: Record<string, string> = {
   confirmed: "border-success/35 bg-success-soft text-success",
+  exported: "border-accent/40 bg-accent/12 text-accent-strong",
   approved: "border-success/35 bg-success-soft text-success",
   failed: "border-danger/40 bg-danger-soft text-danger",
   rejected: "border-danger/40 bg-danger-soft text-danger",
@@ -301,6 +309,7 @@ function Header({
   t,
   blockingCount,
   onConfirm,
+  onExported,
   onHelp,
 }: {
   detail: AnnotationDetail;
@@ -309,13 +318,14 @@ function Header({
   t: Messages;
   blockingCount: number;
   onConfirm: () => void;
+  onExported: () => void;
   onHelp: () => void;
 }) {
   const next = otherLocale(locale);
   const statusLabel = (t.status as Record<string, string>)[state.status] ?? state.status;
   const invoiceNumber = headerValue(state.fields, "invoice_number");
   const seller = headerValue(state.fields, "seller_name");
-  const confirmed = state.status === "confirmed";
+  const confirmed = isConfirmed(state.status);
   const blocked = blockingCount > 0 && !confirmed;
 
   const confirmFace = confirmed
@@ -394,6 +404,14 @@ function Header({
         </button>
 
         <span className="mx-1.5 h-6 w-px bg-line" aria-hidden />
+
+        <ExportMenu
+          annotationId={detail.annotation_id}
+          confirmed={confirmed}
+          locale={locale}
+          t={t}
+          onExported={onExported}
+        />
 
         <button
           type="button"

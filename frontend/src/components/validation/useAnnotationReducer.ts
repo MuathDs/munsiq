@@ -56,7 +56,8 @@ export type Action =
   | { type: "confirm:start" }
   | { type: "confirm:ok" }
   | { type: "confirm:blocked"; message: string; blockers: string[] }
-  | { type: "confirm:dismiss" };
+  | { type: "confirm:dismiss" }
+  | { type: "export:ok" };
 
 export function initialState(detail: AnnotationDetail): WorkspaceState {
   return {
@@ -182,6 +183,11 @@ export function reducer(state: WorkspaceState, action: Action): WorkspaceState {
 
     case "confirm:dismiss":
       return { ...state, confirmError: null };
+
+    case "export:ok":
+      // Export is a lifecycle state. Only a confirmed invoice moves to it; an
+      // exported one stays exported.
+      return state.status === "confirmed" ? { ...state, status: "exported" } : state;
   }
 }
 

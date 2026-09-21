@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import type { DocumentListItem } from "@/lib/api/types";
 import type { Locale } from "@/lib/i18n";
@@ -24,8 +24,11 @@ export function HistoryView({
   t: Messages;
 }) {
   const { accepted } = useUploads();
+  // Bumped after an export: the backend has moved those invoices to "exported",
+  // and the list should say so now rather than at the next poll.
+  const [exportedCount, setExportedCount] = useState(0);
   const { documents, failing } = useLiveDocuments(initialDocuments, null, {
-    refreshKey: accepted,
+    refreshKey: accepted + exportedCount,
   });
   const { toasts, pushToast, dismissToast } = useToasts();
 
@@ -36,7 +39,14 @@ export function HistoryView({
   return (
     <>
       <TopBar title={t.history.title} subtitle={t.history.subtitle} />
-      <DocumentsTable documents={documents} t={t} locale={locale} toolbar />
+      <DocumentsTable
+        documents={documents}
+        t={t}
+        locale={locale}
+        toolbar
+        onExported={() => setExportedCount((count) => count + 1)}
+        onNotify={pushToast}
+      />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </>
   );

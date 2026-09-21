@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowUpRight, Bot, Inbox, Search, ShieldCheck } from "lucide-react";
+import { ArrowUpRight, Bot, Download, Inbox, Loader2, Search, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
 
 import type { DocumentListItem } from "@/lib/api/types";
+import { downloadFile } from "@/lib/downloadExport";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import type { Locale } from "@/lib/i18n";
 import { interpolate, type Messages } from "@/lib/messages";
@@ -42,6 +43,10 @@ interface Props {
   /** Rendered in the empty state, e.g. a link to the upload page. */
   emptyAction?: ReactNode;
   emptyText?: string;
+  /** Called after a successful export, so the list can refetch the new "exported" state. */
+  onExported?: () => void;
+  /** A short message for the page to show (a toast); the table has nowhere to put one. */
+  onNotify?: (message: string) => void;
 }
 
 export function DocumentsTable({
@@ -51,10 +56,15 @@ export function DocumentsTable({
   toolbar = false,
   emptyAction,
   emptyText,
+  onExported,
+  onNotify,
 }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | Category>("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const counts = useMemo(() => {
     const tally: Record<string, number> = { all: documents.length };
@@ -75,6 +85,51 @@ export function DocumentsTable({
       );
     });
   }, [documents, filter, search]);
+
+  // Only confirmed invoices can be exported, and only those can be selected. What
+  // is selected is re-derived from the live list, so a row that stops being
+  // exportable drops out of the selection instead of failing the whole batch.
+  const exportable = useMemo(
+    () => visible.filter(isExportable).map((doc) => doc.annotation_id as string),
+    [visible],
+  );
+  const chosen = useMemo(
+    () => documents.filter((doc) => isExportable(doc) && selected.has(doc.annotation_id as string)),
+    [documents, selected],
+  );
+  const allChosen = exportable.length > 0 && exportable.every((id) => selected.has(id));
+  const someChosen = exportable.some((id) => selected.has(id));
+  const selectAll = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAll.current) selectAll.current.indeterminate = someChosen && !allChosen;
+  }, [someChosen, allChosen]);
+
+  function toggle(id: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+
+  async function exportSelected() {
+    setExporting(true);
+    setExportError(null);
+    const result = await downloadFile(
+      "/api/bff/annotations/export",
+      locale,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: chosen.map((d) => d.annotation_id) }) },
+      "munsiq-invoices.xlsx",
+    );
+    setExporting(false);
+    if (result.ok) {
+      setSelected(new Set());
+      onNotify?.(interpolate(t.history.downloaded, { file: result.filename }));
+      onExported?.();
+    } else {
+      setExportError(result.message ?? t.history.exportSelectedFailed);
+    }
+  }
 
   return (
     <div className="rounded-[14px] border border-line bg-surface">
@@ -121,6 +176,49 @@ export function DocumentsTable({
         </div>
       ) : null}
 
+      {toolbar && (chosen.length > 0 || exportError) ? (
+        <div
+          role="region"
+          aria-label={t.history.export}
+          className="flex flex-wrap items-center gap-3 border-b border-line bg-accent/8 px-5 py-2.5"
+        >
+          {chosen.length > 0 ? (
+            <>
+              <span className="text-[13px] font-medium text-ink">
+                {interpolate(t.history.selected, { count: chosen.length })}
+              </span>
+              <button
+                type="button"
+                onClick={() => void exportSelected()}
+                disabled={exporting}
+                className="inline-flex h-8 items-center gap-2 rounded-[9px] bg-accent px-3 text-[13px] font-semibold text-white transition-colors hover:bg-accent-strong disabled:opacity-70"
+              >
+                {exporting ? (
+                  <Loader2 size={14} className="animate-spin" aria-hidden />
+                ) : (
+                  <Download size={14} aria-hidden />
+                )}
+                {exporting
+                  ? t.history.exportingSelected
+                  : interpolate(t.history.exportSelected, { count: chosen.length })}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                className="text-[13px] text-ink-soft underline-offset-2 hover:text-ink hover:underline"
+              >
+                {t.history.clearSelection}
+              </button>
+            </>
+          ) : null}
+          {exportError ? (
+            <p role="alert" className="text-[13px] text-danger">
+              {exportError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {documents.length === 0 || visible.length === 0 ? (
         <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
           <Inbox size={28} className="text-ink-faint" aria-hidden />
@@ -134,6 +232,21 @@ export function DocumentsTable({
           <table className="w-full min-w-[900px] text-start text-sm">
             <thead>
               <tr className="text-xs uppercase tracking-wide text-ink-faint">
+                {toolbar ? (
+                  <th className="w-10 ps-4 pe-0">
+                    <input
+                      ref={selectAll}
+                      type="checkbox"
+                      checked={allChosen}
+                      disabled={exportable.length === 0}
+                      onChange={() =>
+                        setSelected(allChosen ? new Set() : new Set(exportable))
+                      }
+                      aria-label={t.history.selectAll}
+                      className="h-4 w-4 accent-[var(--accent)]"
+                    />
+                  </th>
+                ) : null}
                 <Th>{t.history.columns.document}</Th>
                 <Th>{t.history.columns.seller}</Th>
                 <Th align="end">{t.history.columns.total}</Th>
@@ -158,6 +271,21 @@ export function DocumentsTable({
                       openable ? "cursor-pointer hover:bg-surface-hover" : ""
                     }`}
                   >
+                    {toolbar ? (
+                      <td className="w-10 ps-4 pe-0" onClick={(event) => event.stopPropagation()}>
+                        {isExportable(doc) ? (
+                          <input
+                            type="checkbox"
+                            checked={selected.has(doc.annotation_id as string)}
+                            onChange={() => toggle(doc.annotation_id as string)}
+                            aria-label={interpolate(t.history.selectRow, {
+                              name: doc.invoice_number ?? doc.filename ?? t.history.unnamed,
+                            })}
+                            className="h-4 w-4 accent-[var(--accent)]"
+                          />
+                        ) : null}
+                      </td>
+                    ) : null}
                     <td className="min-w-[230px] max-w-[300px] px-4 py-3.5">
                       <div className="flex min-w-0 items-center gap-2.5">
                         <div className="min-w-0">
@@ -231,7 +359,15 @@ export function DocumentsTable({
                     </td>
                     <td className="px-4 py-3.5">
                       {isExportable(doc) ? (
-                        <ExportLinks id={doc.annotation_id as string} t={t} />
+                        <ExportLinks
+                          id={doc.annotation_id as string}
+                          t={t}
+                          locale={locale}
+                          onDone={(message) => {
+                            onNotify?.(message);
+                            onExported?.();
+                          }}
+                        />
                       ) : openable ? (
                         <ArrowUpRight
                           size={15}
@@ -291,7 +427,35 @@ function SourceChip({ doc, t }: { doc: DocumentListItem; t: Messages }) {
   return <span className="text-ink-faint">—</span>;
 }
 
-function ExportLinks({ id, t }: { id: string; t: Messages }) {
+function ExportLinks({
+  id,
+  t,
+  locale,
+  onDone,
+}: {
+  id: string;
+  t: Messages;
+  locale: Locale;
+  onDone: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function run(format: (typeof EXPORT_FORMATS)[number]) {
+    setBusy(format);
+    const result = await downloadFile(
+      `/api/bff/annotations/${id}/export?format=${format}`,
+      locale,
+      undefined,
+      `munsiq-invoice.${format}`,
+    );
+    setBusy(null);
+    onDone(
+      result.ok
+        ? interpolate(t.history.downloaded, { file: result.filename })
+        : (result.message ?? t.actions.exportFailed),
+    );
+  }
+
   return (
     <div
       role="group"
@@ -300,15 +464,16 @@ function ExportLinks({ id, t }: { id: string; t: Messages }) {
       onClick={(event) => event.stopPropagation()}
     >
       {EXPORT_FORMATS.map((format) => (
-        <a
+        <button
           key={format}
-          href={`/api/bff/annotations/${id}/export?format=${format}`}
-          download
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void run(format)}
           title={interpolate(t.history.exportAs, { format: format.toUpperCase() })}
-          className="rounded-[6px] px-1.5 py-0.5 font-mono text-[11px] font-semibold uppercase text-ink-soft transition-colors hover:bg-surface-hover hover:text-ink"
+          className="rounded-[6px] px-1.5 py-0.5 font-mono text-[11px] font-semibold uppercase text-ink-soft transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-50"
         >
-          {format}
-        </a>
+          {busy === format ? "…" : format}
+        </button>
       ))}
     </div>
   );
