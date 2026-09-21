@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import sys
 import uuid
 from dataclasses import dataclass
@@ -434,6 +435,28 @@ def build_pdf(inv: Invoice) -> bytes:
     return out.getvalue()
 
 
+def expected_values(inv: Invoice) -> dict[str, str | None]:
+    """What a perfect reader would return for this invoice, field by field.
+
+    The page and these numbers come from the same object, so they agree by
+    construction. ``None`` means the field is genuinely not on the page, which is
+    also something a reader can get wrong (by inventing one).
+    """
+    return {
+        "invoice_number": inv.number,
+        "issue_date": inv.date,
+        "seller_name": inv.seller,
+        "seller_trn": inv.seller_trn,
+        "buyer_name": inv.buyer,
+        "buyer_trn": inv.buyer_trn,
+        "subtotal": f"{inv.subtotal:.2f}",
+        "vat_amount": f"{inv.vat:.2f}",
+        "total_amount": f"{inv.total:.2f}",
+        "currency": "SAR",
+        "purchase_order_number": inv.po_number,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # The dry run: the deterministic stages only. No database, no storage, no model.
 # --------------------------------------------------------------------------- #
@@ -460,20 +483,7 @@ def predict(inv: Invoice, pdf: bytes) -> Prediction:
         source, note = "ubl_xml", "Step Zero reads the signed XML; the model is never called."
     else:
         # What the page prints. A prediction, ASSUMING the model reads it correctly.
-        values = {
-            "invoice_number": inv.number,
-            "issue_date": inv.date,
-            "seller_name": inv.seller,
-            "seller_trn": inv.seller_trn,
-            "buyer_name": inv.buyer,
-            "buyer_trn": inv.buyer_trn,
-            "subtotal": f"{inv.subtotal:.2f}",
-            "vat_amount": f"{inv.vat:.2f}",
-            "total_amount": f"{inv.total:.2f}",
-            "currency": "SAR",
-        }
-        if inv.po_number:
-            values["purchase_order_number"] = inv.po_number
+        values = {k: v for k, v in expected_values(inv).items() if v is not None}
         source = "vlm"
         note = "No attachment: the model runs. Rules predicted from the printed values."
 
@@ -524,6 +534,14 @@ def generate(out_dir: Path) -> list[tuple[Invoice, bytes, Prediction]]:
         pdf = build_pdf(inv)
         (out_dir / inv.filename).write_bytes(pdf)
         results.append((inv, pdf, predict(inv, pdf)))
+    # Ground truth for scripts/benchmark.py. Lives beside the PDFs, so it is
+    # git-ignored with them, and it is invented data like everything else here.
+    (out_dir / "expected.json").write_text(
+        json.dumps(
+            {inv.filename: expected_values(inv) for inv in INVOICES}, ensure_ascii=False, indent=2
+        ),
+        encoding="utf-8",
+    )
     return results
 
 
