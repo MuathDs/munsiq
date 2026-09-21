@@ -58,6 +58,18 @@ splits a file into documents (see "A PDF can hold more than one document", below
   is a call-site change rather than a rewrite. Revisit before anything resembling
   real volume.
 
+- **Document classification.** Not built. Every document is read with the one
+  tax-invoice schema, whatever it is, so the schema is applied to documents that
+  cannot satisfy it. The real example: a marketplace *purchase summary*
+  (ملخص المشتريات) carries no seller VAT number, no VAT amount and no tax-invoice
+  structure at all, so its null seller TRN and null VAT are CORRECT, and its only
+  amount is a tax-inclusive total that the schema's "subtotal" then invites the
+  model to copy. `SUBTOTAL_EQUALS_TOTAL` and the tightened subtotal guideline
+  contain the damage; they do not fix the cause, which is that nothing decides
+  "what kind of document is this" before choosing what to ask for. With
+  classification each kind would get its own schema, and a summary would not be
+  asked for a TRN it cannot have.
+
 - **ZATCA QR as a "Step Zero" for simplified (B2C) invoices.** Not built; recorded
   because it is the obvious next thing. A B2C simplified invoice has no UBL
   attachment, so Step Zero finds nothing and the model runs — but the invoice must
@@ -149,11 +161,51 @@ FIXED, and worth remembering why:
   with one, and must not be a label ending in a colon. Each half keeps its own
   word box.
 
+- **A missed field looked green** (fixed 2026-09-21). A null for a field whose label
+  is printed on the page was recorded as a correct null: `auto_validated`,
+  confidence 1.0. Now `extraction/labels.py` checks the schema's labels and
+  synonyms against the page with whitespace removed (the text layer can cut the
+  words apart), and a hit makes the null `review_suggested`, confidence 0. A plural
+  ("المشتريات" in a title) is not the label "المشتري". Synonyms are schema data.
+- **A copied total became the subtotal** (fixed 2026-09-21). The guideline now says
+  EXCLUDING VAT and that a lone tax-inclusive amount means the subtotal is null,
+  and `SUBTOTAL_EQUALS_TOTAL` (warning) flags a subtotal equal to the total with
+  no VAT stated. A stated VAT of 0.00 is a real zero-rated invoice and passes.
+  A warning now also downgrades an `auto_validated` field to `review_suggested`.
+- **The inference client could not have seen truncation** (2026-09-21). It sent no
+  seed, discarded `usage`, and Ollama truncates an over-long prompt silently. It now
+  sends `INFERENCE_SEED`, records token usage, and raises (without retrying) when
+  prompt plus reply reaches `INFERENCE_NUM_CTX` or the reply stops at its length
+  limit. Ollama's `/v1` endpoint IGNORES `num_ctx` (checked, 0.34.1): the context
+  is set by Modelfile or `OLLAMA_CONTEXT_LENGTH`, and `INFERENCE_NUM_CTX` must be
+  changed to match. It was not the cause of the misses that prompted this: those
+  prompts were 1,142 and 1,460 tokens of 4,096.
+
 STILL OPEN:
 
+- **Some text layers cut Arabic words apart.** The cause of the missed buyer name on
+  the second real invoice, a marketplace purchase summary. Its text layer split
+  words after non-joining letters: 40% of the Arabic tokens were single letters and
+  none began with the definite article, so the model lost its field labels. On a
+  two-column layout (labels in one row, values in the next) it returned null for the
+  buyer and put the buyer's text into the seller. Reproduced with invented text:
+  the same page with whole words is read correctly, 3 runs of 3. Sampling and
+  context were ruled out (temperature 0; cold runs identical; 1,142 of 4,096 tokens).
+  NOT fixed: whether MuPDF or the producer cuts the words, and at what gap, needs
+  measured gaps from the real file, and the file is personal data that was not
+  opened. `TEXT_LAYER_FRAGMENTED` (warning) now says so on the page, and the
+  silent-miss rule flags the resulting nulls. To close it: run
+  `scripts/text_layer_report.py <pdf>` on such a file (numbers only, no text) and
+  join fragments whose gap is below the measured word-gap floor.
+- **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
+  `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
+  and a fixed seed changed nothing (greedy decoding). Consecutive documents share
+  the system prompt and field list, so every second upload is a warm run.
+  Not fixed: Ollama's `/v1` offers no way to bypass the cache.
+
 - **A PDF can hold more than one document.** The first real invoice was one file
-  with two: a marketplace purchase summary on page 1 and the Noor tax
-  invoice on page 2, with different totals. The pipeline treats a file as one document —
+  with two: a marketplace purchase summary on page 1 and the marketplace tax invoice on
+  page 2, with different totals. The pipeline treats a file as one document —
   `document_parts` gets a single part spanning every page — and the model is handed
   all pages as one prompt, so which total it returns is a matter of which page it
   weighs more. It happened to pick page 2 (the right one); nothing
