@@ -45,7 +45,7 @@ flowchart TD
     G --> E
     D --> H["Grounding<br/>value → normalized bbox 0.0–1.0"]
     E --> H
-    H --> I["Deterministic validation<br/>14 rules · bilingual messages<br/>errors block confirmation"]
+    H --> I["Deterministic validation<br/>16 rules · bilingual messages<br/>errors block confirmation"]
     I --> J[("PostgreSQL<br/>RLS FORCEd per tenant")]
     J --> K["Review workspace<br/>ar/en · RTL · provenance badges<br/>click a field → box on the page"]
     K -->|"corrections → revalidate"| I
@@ -98,9 +98,9 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **361 passed, 1 skipped, 1 xfailed — 17m42s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-21. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
-| Validation rules | **14** (10 blocking errors, 4 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-20 |
-| Validation coverage | **100% statements and branches** — 445 statements, 148 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 97 tests, 23.3 s under coverage instrumentation and **1.6 s** without it (the rules are pure functions) |
+| Backend test suite | **398 passed, 1 skipped, 1 xfailed — 21m00s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-21. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Validation rules | **16** (10 blocking errors, 6 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-21 |
+| Validation coverage | **100% statements and branches** — 473 statements, 156 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 98 tests, **1.5 s** without coverage instrumentation (the rules are pure functions) |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
 | Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies`, 2026-09-20 |
 | Document A, compliant | **0 model calls**; 19 fields (11 header + 8 line-item cells); 9/11 header and 5/8 line cells grounded; no blockers | queried from the database, 2026-09-20 |
@@ -144,7 +144,7 @@ backend through the BFF; nothing is a placeholder.
 
 ![Batch upload](docs/screenshots/upload-en.png)
 
-![History, with search, status filters and per-row export](docs/screenshots/history-en.png)
+![History, with search, status filters, per-row export and multi-select](docs/screenshots/history-en.png)
 
 ![Templates: the extraction schemas the pipeline reads, read-only](docs/screenshots/templates-en.png)
 
@@ -188,6 +188,21 @@ formats cannot drift. XLSX has two sheets, Invoice and Line Items.
 Only a confirmed annotation exports; anything else is a 409 explaining why, in
 Arabic and English. Every export writes an `exports` row with a hash of the
 bytes.
+
+**Export is a lifecycle state, not just a download.** A successful export moves a
+confirmed annotation to `exported`. It is still confirmed (the contract says so),
+can be downloaded again in another format, and confirming it again does not undo
+the export.
+
+`POST /api/v1/annotations/export` takes up to 200 ids and returns **one workbook**:
+an Invoices sheet (a row per invoice, a column per field, money as real numbers)
+and a Line Items sheet. It is all or nothing: one unconfirmed id refuses the batch
+and names every offender, so nothing is half exported.
+
+In the UI, the workspace has an Export menu (Excel, CSV, JSON) that is disabled
+before confirmation and says why, and History lets you tick confirmed rows and
+export them together. Downloads go through `fetch`, so a refusal shows its message
+instead of being saved as a file.
 
 Invoice text is untrusted input, so a value like `=HYPERLINK(...)` is forced to
 a string cell in XLSX (openpyxl would otherwise store it as a live formula) and

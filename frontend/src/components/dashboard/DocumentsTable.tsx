@@ -286,7 +286,7 @@ export function DocumentsTable({
                         ) : null}
                       </td>
                     ) : null}
-                    <td className="min-w-[230px] max-w-[300px] px-4 py-3.5">
+                    <td className="min-w-[190px] max-w-[300px] px-4 py-3.5">
                       <div className="flex min-w-0 items-center gap-2.5">
                         <div className="min-w-0">
                           {openable ? (

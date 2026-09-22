@@ -106,10 +106,16 @@ Click **Confirm**. It refuses, and a banner says why, with the rule code.
 Correct the total to `21160.00`. The blocker clears, the badge turns to
 *Corrected*, and **Confirm** goes through.
 
-## 1:25 — Export, from History
+## 1:25 — Export
 
-Open **History**. The confirmed rows carry **JSON · XLSX · CSV** links; the others
-do not, because only a confirmed annotation leaves the system. Every field comes
+In the workspace, **Export** sits next to **Confirm**. Before confirmation it is
+disabled and its tooltip says why; once the invoice is confirmed it offers Excel,
+CSV and JSON, and after a download the badge turns to **Exported**.
+
+Open **History**. The confirmed and exported rows carry **JSON · XLSX · CSV** links
+and a checkbox; the others do not, because only a confirmed annotation leaves the
+system. Tick both and **Export 2 to Excel** downloads one workbook (an Invoices
+sheet and a Line Items sheet). Every field of a single export comes
 back with `value`, `source`, `confidence`, `bbox`, `reviewed_by` and
 `original_value` — so a downstream system can see that the total was a model
 reading that a human overrode, and what it said before.
