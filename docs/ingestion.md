@@ -88,6 +88,41 @@ Tests: `tests/test_pagetext_order.py`. The fixtures reproduce the mechanism
 (per-glyph positioned Arabic words in either stream order); the real PDF is
 personal data and is not in the repository.
 
+## Word segmentation is ours, not MuPDF's
+
+The reading-order fix above reorders whatever "words" `page.get_text("words")`
+handed back. That tool turned out to be unreliable independent of any one
+document: it can under-segment (a real inter-word gap with no explicit space
+glyph comes back as a single "word" — reproduced with correctly measured
+glyph widths and no artificial padding) and, separately, it can over-segment
+Arabic disproportionately right after a letter that does not join forward. It
+even showed up in `page.get_text()` itself, on one of our OWN generated
+invoices: a ~300pt gap between two table cells lost its separator.
+
+So `_words_from_text_layer` builds words itself from raw glyph positions
+(`page.get_text("rawdict")`) instead. A gap is a word break when it exceeds a
+factor of the average width of the two glyphs either side of it — **relative
+to the glyphs on that page, never a fixed point size**, so the same ratio
+segments identically at 8pt and at 80pt. An explicit space character always
+wins over the measurement, regardless of what the gap says. The threshold is
+looser specifically right after a letter that never joins forward (the alef
+family, دذ, ر ز, و — `NON_JOINING_LETTERS`), because a renderer that shapes
+Arabic in separate runs can leave a small positioning seam exactly where a run
+ends; the allowance is bounded, so a real word boundary in that position still
+splits.
+
+None of the four thresholds were tuned against the deleted real invoice — only
+against measured font metrics and the general shape of each failure mode, on
+purpose: fitting a threshold to one document is the mistake this project
+exists to fix in the model, and doing the same thing in the extraction code
+would not be better. Whether our own row-fusion/column-split code contributed
+to the original over-fragmentation was checked directly rather than assumed:
+it only reorders already-built words into rows and cuts a fragment at a real
+column gap, and cannot turn one word into several letters
+(`test_reading_order_never_changes_the_word_count`).
+
+Tests: `tests/test_word_segmentation.py`.
+
 ## The Arabic OCR gap — known, and made loud
 
 The OCR engine is **RapidOCR** (ONNX Runtime). It was chosen because it is the

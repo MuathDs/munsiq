@@ -180,23 +180,47 @@ FIXED, and worth remembering why:
   is set by Modelfile or `OLLAMA_CONTEXT_LENGTH`, and `INFERENCE_NUM_CTX` must be
   changed to match. It was not the cause of the misses that prompted this: those
   prompts were 1,142 and 1,460 tokens of 4,096.
+- **Word segmentation was MuPDF's, and MuPDF's tokenizer is not reliable across
+  producers** (2026-09-22). The Arabic-word-fragmentation entry below named the
+  cause as "some text layers cut Arabic words apart" and left it open pending
+  measured gaps from the (deleted, personal-data) real file. Building a diverse
+  synthetic corpus instead of waiting on that file showed the real fault: not
+  one producer's quirk, but `get_text("words")` itself, in both directions —
 
-STILL OPEN:
+  * UNDER-segments: three Arabic words, correctly measured isolated-form
+    glyphs, one real inter-word space, no artificial padding anywhere —
+    `get_text("words")` returns **one** "word" for all three
+    (`test_mupdf_words_tool_merges_real_gaps_into_one_word`).
+  * OVER-segments: on the real invoice, Arabic tokens split disproportionately
+    right after a letter that does not join forward.
+  * Even plain `page.get_text()` (not the word tokenizer) drops the separator
+    across a genuine ~300pt gap between two table cells on one of our OWN
+    generated Arabic invoices — found by accident while fixing this, see
+    `test_an_html_rendered_arabic_page_reads_correctly`.
 
-- **Some text layers cut Arabic words apart.** The cause of the missed buyer name on
-  the second real invoice, a marketplace purchase summary. Its text layer split
-  words after non-joining letters: 40% of the Arabic tokens were single letters and
-  none began with the definite article, so the model lost its field labels. On a
-  two-column layout (labels in one row, values in the next) it returned null for the
-  buyer and put the buyer's text into the seller. Reproduced with invented text:
-  the same page with whole words is read correctly, 3 runs of 3. Sampling and
-  context were ruled out (temperature 0; cold runs identical; 1,142 of 4,096 tokens).
-  NOT fixed: whether MuPDF or the producer cuts the words, and at what gap, needs
-  measured gaps from the real file, and the file is personal data that was not
-  opened. `TEXT_LAYER_FRAGMENTED` (warning) now says so on the page, and the
-  silent-miss rule flags the resulting nulls. To close it: run
-  `scripts/text_layer_report.py <pdf>` on such a file (numbers only, no text) and
-  join fragments whose gap is below the measured word-gap floor.
+  `pagetext._words_from_text_layer` no longer calls `get_text("words")` at
+  all. It builds words itself from raw glyph positions
+  (`page.get_text("rawdict")`), grouping characters by a gap compared against
+  the width of the two glyphs either side of it — **never a fixed point
+  size**, so the same ratio segments identically at 8pt and at 80pt
+  (`test_the_same_ratio_is_judged_the_same_at_any_font_size`). An explicit
+  space character always wins over the gap measurement. The threshold is
+  looser right after a letter that never joins forward (`NON_JOINING_LETTERS`
+  — the alef family, دذ, ر ز, و), because a shaping-unaware renderer can leave
+  a positioning seam exactly there; the allowance is bounded, so a real word
+  boundary in that position still splits
+  (`test_a_true_inter_word_gap_after_a_non_joining_letter_still_splits`). None
+  of the four constants involved were calibrated against the deleted file —
+  only against measured font metrics and the general shape of the bug class.
+
+  Checked directly, per CLAUDE.md's own hard rule about not repeating the
+  fine-tune's mistake: our OWN row-fusion/column-split code
+  (`_fuse_into_rows`, `_split_at_gaps`) was NOT the source. Those functions
+  only reorder already-built words into rows and cut a fragment at a real
+  column gap; they never look inside a word, so they cannot turn one word
+  into several letters (`test_reading_order_never_changes_the_word_count`).
+  `scripts/text_layer_report.py`'s numbers were always describing MuPDF's
+  tokenizer output, not ours.
 - **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
   `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
   and a fixed seed changed nothing (greedy decoding). Consecutive documents share

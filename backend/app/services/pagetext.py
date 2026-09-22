@@ -25,6 +25,20 @@ VISUAL order, and MuPDF puts each on a line of its own, so a printed
 into rows by position and put back into logical order; see ``_reading_order``.
 Second, a value wrapped after a hyphen must be rejoined WITHOUT a space; see
 ``join_words``. Both were found on the first real invoice (a marketplace B2C receipt).
+
+WORD SEGMENTATION IS OURS, NOT MUPDF'S. ``get_text("words")`` is not reliable
+across producers: it can under-segment (two words with a real gap and no space
+glyph come back as one "word" — ``test_mupdf_words_tool_merges_real_gaps_into_
+one_word`` reproduces this with nothing but correctly measured glyph widths, no
+artificial padding) and, separately, it can over-segment Arabic disproportionately
+after a letter that does not join forward. Neither is specific to one file, so
+words are built from raw glyph positions (``page.get_text("rawdict")``) with a
+threshold measured against the glyphs actually on that page — never a fixed
+point size — plus a general allowance (not tuned to any one document) for the
+seam a shaping-unaware renderer leaves after a non-joining letter. See
+``_segment_chars``. The row-level code below (``_reading_order`` and friends)
+only reorders and groups already-built words; it cannot split one, which
+``test_reading_order_never_changes_the_word_count`` pins down.
 """
 
 from __future__ import annotations
@@ -34,7 +48,7 @@ import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Final
+from typing import Final, NamedTuple
 
 import pymupdf
 
@@ -153,22 +167,145 @@ def _words_from_text_layer(page: pymupdf.Page) -> list[Word]:
     if width <= 0 or height <= 0:
         return []
 
+    raw = page.get_text("rawdict")  # type: ignore[no-untyped-call]
     fragments: dict[tuple[int, int], list[Word]] = {}
-    for x0, y0, x1, y1, raw, block, line, *_ in page.get_text("words"):  # type: ignore[no-untyped-call]
-        text = normalize_text(raw)
+    for block_index, block in enumerate(raw.get("blocks", ())):
+        if block.get("type") != 0:  # an image block; no text to read
+            continue
+        for line_index, line in enumerate(block.get("lines", ())):
+            words = _words_from_line(line, width, height)
+            if words:
+                fragments[(block_index, line_index)] = words
+    return _reading_order(list(fragments.values()), width, height)
+
+
+def _words_from_line(line: dict[str, object], width: float, height: float) -> list[Word]:
+    chars: list[_RawChar] = []
+    for span in line.get("spans", ()):  # type: ignore[attr-defined]
+        span_chars = span.get("chars")
+        if span_chars:
+            for c in span_chars:
+                x0, y0, x1, y1 = c["bbox"]
+                chars.append(_RawChar(c=c["c"], x0=x0, y0=y0, x1=x1, y1=y1))
+        else:
+            # No char-level detail (seen for some Type3/embedded fonts): fall
+            # back to the span as a single unit rather than dropping it.
+            text = span.get("text")
+            bbox = span.get("bbox")
+            if text and bbox:
+                x0, y0, x1, y1 = bbox
+                chars.append(_RawChar(c=text, x0=x0, y0=y0, x1=x1, y1=y1))
+    chars.sort(key=lambda c: c.x0)
+
+    words: list[Word] = []
+    for spatial_group in _segment_chars(chars):
+        # Grouped by physical (x-ascending) adjacency, which is backwards for a
+        # right-to-left word: its first letter sits at the largest x. Put the
+        # group's own characters back into logical (reading) order before
+        # joining them — the row-level reordering below this function only
+        # handles the order of WHOLE words, not the letters inside one.
+        group = (
+            list(reversed(spatial_group))
+            if any(_is_rtl_letter(c.c) for c in spatial_group)
+            else spatial_group
+        )
+        original = "".join(c.c for c in group)
+        text = normalize_text(original)
         if not text:
             continue
-        fragments.setdefault((block, line), []).append(
+        gx0 = min(c.x0 for c in group)
+        gy0 = min(c.y0 for c in group)
+        gx1 = max(c.x1 for c in group)
+        gy1 = max(c.y1 for c in group)
+        words.append(
             Word(
                 text=text,
-                original=raw,
-                x0=max(0.0, min(1.0, x0 / width)),
-                y0=max(0.0, min(1.0, y0 / height)),
-                x1=max(0.0, min(1.0, x1 / width)),
-                y1=max(0.0, min(1.0, y1 / height)),
+                original=original,
+                x0=max(0.0, min(1.0, gx0 / width)),
+                y0=max(0.0, min(1.0, gy0 / height)),
+                x1=max(0.0, min(1.0, gx1 / width)),
+                y1=max(0.0, min(1.0, gy1 / height)),
             )
         )
-    return _reading_order(list(fragments.values()), width, height)
+    return words
+
+
+# --------------------------------------------------------------------------- #
+# Word segmentation — glyph positions to words, relative thresholds only
+# --------------------------------------------------------------------------- #
+class _RawChar(NamedTuple):
+    c: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @property
+    def width(self) -> float:
+        return self.x1 - self.x0
+
+
+NON_JOINING_LETTERS: Final = frozenset("اأإآدذرزو")
+"""Arabic letters that never connect to the letter after them (the alef family,
+دذ, ر ز, و). A word can legitimately have one anywhere inside it — most Arabic
+words end in one — so the gap that follows gets a looser allowance below."""
+
+_GAP_FACTOR: Final = 0.5
+"""A gap this many times the average width of its two neighbouring glyphs is a
+word break, when no explicit space character separates them. Relative to the
+glyphs actually on the page, never a fixed point size, so it holds at 8pt and
+at 80pt alike. Calibrated against a real inter-word gap (one space-character
+width in 12pt Arial: ratio of roughly 0.55-0.8 against neighbouring glyph
+widths) and against ordinary intra-word kerning (ratio of roughly 0)."""
+
+_NONJOIN_GAP_FACTOR: Final = 1.1
+"""The same test, loosened after a non-joining letter. A renderer that shapes
+Arabic in separate connected-run pieces (a general failure mode: it can leave a
+positioning seam exactly where a run ends, which is exactly after a non-joining
+letter) must not have that seam read as a space. Bounded well under 2.0 — a
+real word boundary, roughly a full glyph width or more, still splits."""
+
+
+def _is_space_char(ch: str) -> bool:
+    return ch.isspace()
+
+
+def _local_scale(a: _RawChar, b: _RawChar) -> float:
+    widths = [w for w in (a.width, b.width) if w > 0]
+    return (sum(widths) / len(widths)) if widths else 1.0
+
+
+def _segment_chars(chars: list[_RawChar]) -> list[list[_RawChar]]:
+    """Group characters — already sorted by x — into words.
+
+    1. An explicit space character always breaks, regardless of the gap either
+       side of it (``_is_space_char``): a producer that bothered to draw a space
+       said so, and that beats any geometric guess.
+    2. Otherwise the gap since the previous glyph is compared with the average
+       width of the two glyphs on either side of it — relative, never absolute.
+    3. That comparison is looser right after a non-joining letter.
+    """
+    words: list[list[_RawChar]] = []
+    current: list[_RawChar] = []
+    previous: _RawChar | None = None
+    for char in chars:
+        if _is_space_char(char.c):
+            if current:
+                words.append(current)
+            current = []
+            previous = None
+            continue
+        if current and previous is not None:
+            gap = char.x0 - previous.x1
+            factor = _NONJOIN_GAP_FACTOR if previous.c in NON_JOINING_LETTERS else _GAP_FACTOR
+            if gap > factor * _local_scale(previous, char):
+                words.append(current)
+                current = []
+        current.append(char)
+        previous = char
+    if current:
+        words.append(current)
+    return words
 
 
 # --------------------------------------------------------------------------- #
