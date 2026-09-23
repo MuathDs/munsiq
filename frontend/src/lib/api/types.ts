@@ -66,6 +66,9 @@ export interface ValidationFinding {
 export interface PageInfo {
   page_number: number;
   text_source: string | null;
+  /** 'text' | 'vision' | null — null means Step Zero answered and no model
+   * (so no per-page routing decision) ever ran for this page. */
+  extraction_path: "text" | "vision" | null;
   width_px: number | null;
   height_px: number | null;
   /** Short-lived signed URL. Expires in five minutes — do not cache it. */
@@ -188,7 +191,8 @@ export interface Org {
 export interface SystemInfo {
   environment: string;
   inference_model: string;
-  extraction_use_vision: boolean;
+  extraction_mode: "text" | "vision" | "auto";
+  vision_model: string;
   ocr_engine: string;
   max_upload_bytes: number;
   grounding_threshold: number;

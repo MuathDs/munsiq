@@ -120,7 +120,8 @@ class SystemInfo(BaseModel):
 
     environment: str
     inference_model: str
-    extraction_use_vision: bool
+    extraction_mode: str
+    vision_model: str
     ocr_engine: str
     max_upload_bytes: int
     grounding_threshold: int

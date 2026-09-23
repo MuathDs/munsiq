@@ -246,6 +246,25 @@ def build_pdf_with_embedded_xml_and_blank_page(
     return buffer.getvalue()
 
 
+def build_pdf_with_text_layer_and_blank_second_page() -> bytes:
+    """Page 1 has a real text layer; page 2 is a blank filler. No attachment, so
+    Step Zero finds nothing and the model path runs over BOTH pages — this is
+    the shape auto-routing must split: page 1 stays on the (cheap, exact) text
+    path, page 2 alone needs vision.
+    """
+    from pypdf import PdfReader
+
+    visible = build_pdf_with_text_layer()
+    reader = PdfReader(BytesIO(visible))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.add_blank_page(width=595, height=842)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def build_pdf_with_non_xml_attachment() -> bytes:
     """A PDF whose only attachment is not XML — Step Zero must return None."""
     writer = PdfWriter()

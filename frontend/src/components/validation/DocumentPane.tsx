@@ -22,7 +22,7 @@
  * page geometry is the one place in this UI that must not follow `dir`.
  */
 
-import { Maximize, Minus, Plus } from "lucide-react";
+import { Eye, Maximize, Minus, Plus } from "lucide-react";
 import { useState } from "react";
 import { TransformComponent, TransformWrapper } from "react-zoom-pan-pinch";
 
@@ -239,8 +239,17 @@ function PageCanvas({
           })}
         </svg>
       </div>
-      <figcaption className="tabular mt-2 text-center font-mono text-[11px] text-ink-faint">
-        {page.page_number}
+      <figcaption className="mt-2 flex items-center justify-center gap-1.5 text-center font-mono text-[11px] text-ink-faint">
+        <span className="tabular">{page.page_number}</span>
+        {page.extraction_path === "vision" ? (
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning-soft px-1.5 py-0.5 text-warning"
+            title={t.workspace.readAsVisionTooltip}
+          >
+            <Eye size={10} strokeWidth={2.25} aria-hidden />
+            {t.workspace.readAsVision}
+          </span>
+        ) : null}
       </figcaption>
     </figure>
   );

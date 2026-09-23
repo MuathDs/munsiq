@@ -297,6 +297,27 @@ FIXED, and worth remembering why:
   generated Arabic invoices, 2026-09-20). The value itself is unaffected.
 - **The UBL in generated test invoices is ZATCA-shaped, not certified.** Only a
   real sample proves the parser against certified output (see samples/README.md).
+- **Text and vision disagree on 6 of 9 fields for the one real invoice with no
+  usable ground truth yet.** 2026-09-23, the contractor invoice (behind annotation
+  `995412b3`, no embedded UBL): both paths, run through the FULL
+  schema-conditioned prompt with field guidelines (not the bare prompt used for
+  the manual test that motivated building vision at all — see below), extracted
+  a value for 8 of 9 header fields, but the two paths AGREED on only 3
+  (`invoice_number`, `issue_date`, `seller_trn`); they disagreed on both names,
+  `buyer_trn`, and all three totals-block fields. This is an AGREEMENT count,
+  not a correctness count — no hand-entered ground truth exists for this
+  document (`scripts/eval_set.py` exists to build one; none has been loaded
+  yet) — so it does NOT show which path is right, only that schema-conditioned
+  vision and schema-conditioned text read this real invoice quite differently
+  from each other. That is itself evidence for the deferred **document
+  classification** entry above: a marketplace-summary-shaped first page or a
+  totals block the guidelines still under-specify could easily explain the
+  totals-field disagreement on its own. Contrast with the user's own earlier
+  manual test (a BARE prompt, no field list, sent straight to `qwen2.5vl:3b`):
+  that got 7 of 9 right by eye, with both errors isolated to the totals block.
+  Whether the schema-conditioned guidelines help or hurt the totals confusion
+  the user's manual test already found is exactly the open question — this run
+  does not answer it, because there is nothing to score either path against yet.
 
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.

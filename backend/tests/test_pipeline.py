@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from typing import ClassVar
 
 import pytest
 import pytest_asyncio
@@ -43,12 +44,15 @@ class RecordingClient:
     """Stands in for Ollama and counts how often it was actually asked."""
 
     calls = 0
+    init_kwargs: ClassVar[list[dict[str, object]]] = []
+    chat_images: ClassVar[list[object]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
-        pass
+        type(self).init_kwargs.append(kwargs)
 
     def chat(self, *, system, user, images=None, json_mode=True):  # type: ignore[no-untyped-def]
         type(self).calls += 1
+        type(self).chat_images.append(images)
         return ChatResult(
             content=json.dumps(
                 {
@@ -89,6 +93,8 @@ async def tenant(tmp_path) -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:  # typ
     previous = storage_mod._storage
     storage_mod._storage = LocalStorage(tmp_path / "storage")
     RecordingClient.calls = 0
+    RecordingClient.init_kwargs = []
+    RecordingClient.chat_images = []
     try:
         yield org_id, queue_id
     finally:
@@ -329,6 +335,112 @@ async def test_text_layer_page_is_recorded_as_such(tenant, monkeypatch) -> None:
             sql("SELECT text_source FROM pages WHERE document_id = :d"), {"d": document_id}
         )
     assert source == "text_layer"
+
+
+# --------------------------------------------------------------------------- #
+# Vision routing (Part B)
+# --------------------------------------------------------------------------- #
+async def test_a_clean_text_document_never_touches_the_vision_path(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The default EXTRACTION_MODE is 'auto', but a single clean page must stay
+    on the cheap, exact text path — no image, no vision client kwargs."""
+    org_id, queue_id = tenant
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", RecordingClient)
+    document_id = await _insert_document(org_id, queue_id, fixtures.build_pdf_with_text_layer())
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.error is None
+    assert outcome.vision_pages == []
+    assert RecordingClient.chat_images == [None]
+    assert RecordingClient.init_kwargs == [{}], "the plain text client takes no overrides"
+
+    async with get_sessionmaker()() as session, session.begin():
+        path = await session.scalar(
+            sql("SELECT extraction_path FROM pages WHERE document_id = :d AND page_number = 1"),
+            {"d": document_id},
+        )
+    assert path == "text"
+
+
+async def test_a_document_with_one_bad_page_routes_only_that_page_to_vision(
+    tenant, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The real-invoice shape: page 1 fine, page 2 unreadable. The whole call
+    must use the vision-capable model (a text model cannot see images at all),
+    but only page 2 is rasterized, attached and recorded as 'vision'."""
+    org_id, queue_id = tenant
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", RecordingClient)
+    document_id = await _insert_document(
+        org_id, queue_id, fixtures.build_pdf_with_text_layer_and_blank_second_page()
+    )
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.error is None
+    assert outcome.vision_pages == [2]
+    assert RecordingClient.calls == 1
+
+    settings = get_settings()
+    assert RecordingClient.init_kwargs == [
+        {
+            "base_url": settings.VISION_INFERENCE_BASE_URL or settings.INFERENCE_BASE_URL,
+            "model": settings.VISION_MODEL,
+            "num_ctx": settings.VISION_NUM_CTX,
+        }
+    ]
+    (images,) = RecordingClient.chat_images
+    assert images is not None and len(images) == 1
+
+    async with get_sessionmaker()() as session, session.begin():
+        rows = (
+            await session.execute(
+                sql(
+                    "SELECT page_number, extraction_path FROM pages "
+                    "WHERE document_id = :d ORDER BY page_number"
+                ),
+                {"d": document_id},
+            )
+        ).all()
+    assert [(r.page_number, r.extraction_path) for r in rows] == [(1, "text"), (2, "vision")]
+
+
+async def test_forced_text_mode_ignores_a_bad_page(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    org_id, queue_id = tenant
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", RecordingClient)
+    monkeypatch.setattr(get_settings(), "EXTRACTION_MODE", "text")
+    document_id = await _insert_document(
+        org_id, queue_id, fixtures.build_pdf_with_text_layer_and_blank_second_page()
+    )
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.error is None
+    assert outcome.vision_pages == []
+    assert RecordingClient.chat_images == [None]
+
+
+async def test_step_zero_leaves_extraction_path_null(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """No model call at all means no routing decision was ever made — a page
+    the signed XML alone answered must not claim a text/vision path it never
+    walked."""
+    org_id, queue_id = tenant
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", RecordingClient)
+    document_id = await _insert_document(
+        org_id, queue_id, fixtures.build_pdf_with_text_layer_and_ubl()
+    )
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.error is None
+    assert outcome.has_embedded_ubl is True
+    assert RecordingClient.calls == 0
+
+    async with get_sessionmaker()() as session, session.begin():
+        path = await session.scalar(
+            sql("SELECT extraction_path FROM pages WHERE document_id = :d AND page_number = 1"),
+            {"d": document_id},
+        )
+    assert path is None
 
 
 # --------------------------------------------------------------------------- #

@@ -74,6 +74,13 @@ class ValidationFinding(BaseModel):
 class PageOut(BaseModel):
     page_number: int
     text_source: str | None = None
+    extraction_path: str | None = Field(
+        default=None,
+        description=(
+            "'text' | 'vision' | null. Null means Step Zero answered and no "
+            "model (so no per-page routing decision) was ever made for this page."
+        ),
+    )
     width_px: int | None = None
     height_px: int | None = None
     image_url: str | None = Field(

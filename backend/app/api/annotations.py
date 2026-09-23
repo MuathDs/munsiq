@@ -152,8 +152,8 @@ async def get_annotation(
     page_rows = (
         await session.execute(
             text(
-                "SELECT page_number, text_source, width_px, height_px, image_key "
-                "FROM pages WHERE document_id = :d ORDER BY page_number"
+                "SELECT page_number, text_source, extraction_path, width_px, height_px, "
+                "image_key FROM pages WHERE document_id = :d ORDER BY page_number"
             ),
             {"d": row.document_id},
         )
@@ -228,6 +228,7 @@ def _page_out(row: Any, org_id: uuid.UUID, document_id: uuid.UUID) -> PageOut:
     return PageOut(
         page_number=row.page_number,
         text_source=row.text_source,
+        extraction_path=row.extraction_path,
         width_px=row.width_px,
         height_px=row.height_px,
         image_url=image_url,

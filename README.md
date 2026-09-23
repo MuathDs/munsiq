@@ -98,7 +98,7 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **423 passed, 1 skipped, 1 xfailed — 21m36s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-23. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **447 passed, 1 skipped, 1 xfailed — 23m00s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-23. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **17** (10 blocking errors, 7 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-23 |
 | Validation coverage | **100% statements and branches** — 473 statements, 156 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 98 tests, **1.5 s** without coverage instrumentation (the rules are pure functions) |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |

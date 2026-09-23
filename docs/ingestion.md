@@ -202,8 +202,43 @@ model. It is deliberately **not** `munsiq-extractor`, the earlier fine-tune,
 whose fixed five-column schema is baked into its weights. Pointing this at that
 model would defeat the entire design of this phase.
 
-Vision is opt-in (`EXTRACTION_USE_VISION`, default false): a VL model does not
-fit comfortably in 4 GB, so the default path sends text only.
+### Text vs. vision routing
+
+`EXTRACTION_MODE` (`text` | `vision` | `auto`, default `auto`) decides, **per
+page**, whether that page is sent as inline text or rasterized and attached as
+an image. Step Zero (signed UBL) always wins regardless of this setting — the
+model is not called at all when the invoice already told us the answer.
+
+`app/services/extraction/routing.py` makes the per-page call: a page with no
+usable text at all (`PageText.is_degraded`) or whose text layer LOOKS cut
+apart — the same signature `TEXT_LAYER_FRAGMENTED` already warns about, see
+below — needs vision; everything else stays on the cheap, exact text path.
+`resolve_mode()` returns both the whole-call decision (`text` or `vision` — a
+text-only model cannot see images at all, so ONE bad page forces the WHOLE
+call through the vision-capable model) and the set of page numbers that
+actually needed it, which is what gets recorded on each `pages` row
+(`extraction_path`) and shown in the review UI next to the page number.
+
+The vision model is deliberately a SEPARATE model, base URL and context budget
+from the text settings (`VISION_MODEL`, `VISION_INFERENCE_BASE_URL`,
+`VISION_NUM_CTX`) — `qwen2.5vl:3b` locally, small enough for 4 GB; a heavier VL
+model belongs on a machine with more VRAM, reached through
+`VISION_INFERENCE_BASE_URL` (a Colab notebook tunnelled through ngrok, say).
+Falls back to the text endpoint when unset. Pages routed to vision are
+rasterized separately from the review UI's own page image, at `VISION_RASTER_DPI`
+(100, lower than `RASTER_DPI`'s 150) — a vision model's prompt cost scales with
+pixel count, and 100 DPI measured at ~1,300 prompt tokens per page on this
+model versus 2.8x that at 150 DPI, for the same accuracy on the pages tested.
+At most `MAX_VISION_PAGES` pages are actually rasterized and attached per
+document; the rest stay on the text path (their own text layer, however
+unreliable) rather than being marked "see the attached image" with nothing to
+back it.
+
+A mixed prompt inlines each text page under its own `--- page N ---` marker and
+replaces an unreliable page's text with `--- page N: no reliable text layer;
+read this page from its attached image instead ---`, in the same order the
+images themselves are attached, so the model can match each marker to the
+image that follows it.
 
 ### Prompt-injection guard
 

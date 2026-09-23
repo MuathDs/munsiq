@@ -77,8 +77,17 @@ export function SettingsView({
             <Row label={t.settings.model} mono>
               {system.inference_model}
             </Row>
-            <Row label={t.settings.vision}>
-              {system.extraction_use_vision ? t.settings.on : t.settings.off}
+            <Row label={t.settings.extractionMode}>
+              {
+                {
+                  text: t.settings.modeText,
+                  vision: t.settings.modeVision,
+                  auto: t.settings.modeAuto,
+                }[system.extraction_mode]
+              }
+            </Row>
+            <Row label={t.settings.visionModel} mono>
+              {system.vision_model}
             </Row>
             <Row label={t.settings.ocr} mono>
               {system.ocr_engine}

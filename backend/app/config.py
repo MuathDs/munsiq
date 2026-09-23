@@ -77,9 +77,48 @@ class Settings(BaseSettings):
     INFERENCE_NUM_CTX: int = 4096
     INFERENCE_MAX_RETRIES: int = 2
 
-    # Vision path is opt-in. A VL model does not fit comfortably in 4GB, so the
-    # default sends OCR/text-layer text only.
-    EXTRACTION_USE_VISION: bool = False
+    # "text": every page as text, however degraded. "vision": every page as an
+    # image, however clean its text is — the forced comparison arm. "auto"
+    # (the default): per page, by app/services/extraction/routing.py — a clean
+    # text layer stays on the cheap, exact text path; a page with no usable
+    # text or a text layer that looks cut apart is read as an image instead.
+    # Step Zero (signed UBL) always wins regardless of this setting — the model
+    # is not called at all when the invoice already told us the answer.
+    EXTRACTION_MODE: Literal["text", "vision", "auto"] = "auto"
+
+    # Deliberately a SEPARATE model, base URL and context size from the text
+    # settings above, not a flag on the same client: the vision model on this
+    # 4GB card is qwen2.5vl:3b, small enough to run locally; a heavier VL model
+    # (qwen2.5vl:7b, say) belongs on a machine with more VRAM — a Colab
+    # notebook tunnelled through ngrok, for instance — which is exactly what
+    # VISION_INFERENCE_BASE_URL is for. Falls back to INFERENCE_BASE_URL when
+    # unset, so a local-only setup needs to configure nothing extra.
+    VISION_MODEL: str = "qwen2.5vl:3b"
+    VISION_INFERENCE_BASE_URL: str | None = None
+    VISION_NUM_CTX: int = 4096
+    """Same reasoning as INFERENCE_NUM_CTX: the client cannot set this over the
+    wire (Ollama's /v1 ignores num_ctx), so it exists to catch an overflow
+    after the fact. An image costs real context — measured on this box, a
+    single page at VISION_RASTER_DPI=100 is ~1,300 prompt tokens before the
+    field guidelines are even added — so this is checked separately from the
+    text path's budget, and independently configurable for a remote model
+    that may be given a larger window."""
+
+    # Lower than RASTER_DPI (150, for the review UI's own page image): a vision
+    # model's prompt cost scales with pixel count, not just file size — the
+    # SAME page measured at 150 DPI cost 2.8x the prompt tokens of 100 DPI on
+    # this model. 100 DPI answered every field correctly in that comparison and
+    # leaves headroom in a 4096-token window for the schema-conditioned prompt
+    # (field guidelines) alongside it.
+    VISION_RASTER_DPI: int = 100
+
+    # However many pages classify as needing vision, at most this many are
+    # actually attached as images to one call — each one costs real context,
+    # and Ollama's /v1 truncates silently past it. The inference client already
+    # fails loudly rather than silently truncating (see extraction/client.py);
+    # this cap exists so a five-page unreadable scan fails predictably instead
+    # of via a token-budget accident.
+    MAX_VISION_PAGES: int = 2
 
     MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
 

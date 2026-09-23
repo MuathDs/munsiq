@@ -77,12 +77,17 @@ class OllamaClient:
         model: str | None = None,
         timeout_s: float | None = None,
         max_retries: int | None = None,
+        num_ctx: int | None = None,
     ) -> None:
         settings = get_settings()
         self.base_url = (base_url or settings.INFERENCE_BASE_URL).rstrip("/")
         self.model = model or settings.INFERENCE_MODEL
         self.timeout_s = timeout_s or settings.INFERENCE_TIMEOUT_S
         self.max_retries = settings.INFERENCE_MAX_RETRIES if max_retries is None else max_retries
+        # Defaults to the text path's budget. A vision client passes
+        # VISION_NUM_CTX explicitly — an image costs real context, and the two
+        # models are not interchangeable here (see config.py).
+        self.num_ctx = settings.INFERENCE_NUM_CTX if num_ctx is None else num_ctx
 
     def chat(
         self, *, system: str, user: str, images: list[bytes] | None = None, json_mode: bool = True
@@ -135,7 +140,7 @@ class OllamaClient:
                     time.sleep(backoff)
             else:
                 # Outside the try: a refusal is deterministic, so it is not retried.
-                _refuse_if_context_exhausted(result)
+                _refuse_if_context_exhausted(result, self.num_ctx)
                 return result
 
         raise InferenceError(
@@ -143,15 +148,18 @@ class OllamaClient:
         ) from last_error
 
 
-def _refuse_if_context_exhausted(result: ChatResult) -> None:
+def _refuse_if_context_exhausted(result: ChatResult, num_ctx: int) -> None:
     """Ollama truncates an over-long prompt silently and answers anyway.
 
     The answer then comes from a document with its beginning cut off, which looks
     exactly like a model that missed a field. The only trace is the token count
     sitting at the window, so that is what is checked. Token counts are logged on
     every call so a creeping prompt is visible before it reaches the limit.
+
+    ``num_ctx`` is the CALLING CLIENT's budget (``self.num_ctx``), not a global
+    read here — a vision client checks against VISION_NUM_CTX, a text client
+    against INFERENCE_NUM_CTX, and they must not be conflated.
     """
-    num_ctx = get_settings().INFERENCE_NUM_CTX
     used = (result.prompt_tokens or 0) + (result.completion_tokens or 0)
     logger.info(
         "inference.usage",

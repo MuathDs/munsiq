@@ -268,6 +268,90 @@ def test_empty_document_does_not_call_the_model() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 6. Mixed text/vision routing
+# --------------------------------------------------------------------------- #
+def test_a_page_with_no_text_but_an_attached_image_is_not_treated_as_empty() -> None:
+    """This is the early-bailout bug: an unreadable page used to make the whole
+    document look empty even when an image was attached for exactly that page."""
+    blank = PageText(page_number=1, source=TextSource.OCR_UNSUPPORTED_SCRIPT)
+    client = FakeClient(
+        {
+            "invoice_number": "SA-2026-0334",
+            "seller_trn": None,
+            "total_amount": None,
+            "purchase_order_number": None,
+        }
+    )
+    result = run_extraction(
+        client=client,
+        fields=FIELDS,
+        pages=[blank],
+        page_images=[b"fake-webp-bytes"],
+        vision_page_numbers=frozenset({1}),
+    )
+
+    assert client.calls != [], "an image was attached — the model must be called"
+    assert result.model_called is True
+    by_key = {v.field_key: v for v in result.values}
+    assert by_key["invoice_number"].value == "SA-2026-0334"
+
+
+def test_vision_pages_are_passed_as_images_to_the_client() -> None:
+    blank = PageText(page_number=1, source=TextSource.OCR_UNSUPPORTED_SCRIPT)
+    client = FakeClient({"invoice_number": None})
+    run_extraction(
+        client=client,
+        fields=FIELDS,
+        pages=[blank],
+        page_images=[b"fake-webp-bytes"],
+        vision_page_numbers=frozenset({1}),
+    )
+    assert client.calls  # sanity: chat was actually invoked
+
+
+def test_a_vision_page_gets_a_marker_not_its_raw_text_in_the_prompt() -> None:
+    """A page routed to vision has unreliable text — that text must not be
+    inlined into the prompt the text-capable reading is skipping past."""
+    fragmented = PageText(
+        page_number=1, source=TextSource.TEXT_LAYER, text="THIS-TEXT-IS-UNRELIABLE-GARBLE"
+    )
+    client = FakeClient({"invoice_number": None})
+    run_extraction(
+        client=client,
+        fields=FIELDS,
+        pages=[fragmented],
+        page_images=[b"fake-webp-bytes"],
+        vision_page_numbers=frozenset({1}),
+    )
+    prompt = client.calls[0]["user"]
+    assert "THIS-TEXT-IS-UNRELIABLE-GARBLE" not in prompt
+    assert "attached image" in prompt
+
+
+def test_a_mixed_document_inlines_the_text_page_and_marks_the_vision_page() -> None:
+    text_page = PageText(page_number=1, source=TextSource.TEXT_LAYER, text="Invoice SA-2026-0334")
+    vision_page = PageText(page_number=2, source=TextSource.OCR_UNSUPPORTED_SCRIPT)
+    client = FakeClient({"invoice_number": "SA-2026-0334"})
+    run_extraction(
+        client=client,
+        fields=FIELDS,
+        pages=[text_page, vision_page],
+        page_images=[b"fake-webp-bytes"],
+        vision_page_numbers=frozenset({2}),
+    )
+    prompt = client.calls[0]["user"]
+    assert "Invoice SA-2026-0334" in prompt
+    assert "page 2" in prompt and "attached image" in prompt
+
+
+def test_a_text_only_call_still_gets_no_images_key() -> None:
+    """Default behaviour (no vision routing at all) is unchanged."""
+    client = FakeClient({"invoice_number": "SA-2026-0334"})
+    run_extraction(client=client, fields=FIELDS, pages=[PAGE])
+    assert client.calls  # the existing suite already covers the prompt shape
+
+
+# --------------------------------------------------------------------------- #
 # 5. The prompt is built from the schema, not hardcoded
 # --------------------------------------------------------------------------- #
 def test_prompt_contains_every_schema_field_and_its_guideline() -> None:

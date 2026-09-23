@@ -283,7 +283,8 @@ async def get_system(
     return SystemInfo(
         environment=settings.ENVIRONMENT,
         inference_model=settings.INFERENCE_MODEL,
-        extraction_use_vision=settings.EXTRACTION_USE_VISION,
+        extraction_mode=settings.EXTRACTION_MODE,
+        vision_model=settings.VISION_MODEL,
         ocr_engine=settings.OCR_ENGINE,
         max_upload_bytes=settings.MAX_UPLOAD_BYTES,
         grounding_threshold=settings.GROUNDING_THRESHOLD,

@@ -98,6 +98,30 @@ def test_a_prompt_well_inside_the_window_passes(monkeypatch: pytest.MonkeyPatch)
     assert OllamaClient(max_retries=0).chat(system="s", user="u").content == '{"a": 1}'
 
 
+def test_num_ctx_override_is_checked_instead_of_the_text_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A vision client passes its own (smaller or larger) budget explicitly.
+
+    Here it is smaller than INFERENCE_NUM_CTX, and the usage sits between the
+    two: under the text budget, over the client's own — so this only fails
+    loudly if the override is actually what gets checked.
+    """
+    text_num_ctx = get_settings().INFERENCE_NUM_CTX
+    override = text_num_ctx - 100
+    assert override > 0
+    fake_endpoint(monkeypatch, prompt_tokens=override, completion_tokens=10)
+
+    with pytest.raises(InferenceError, match="context"):
+        OllamaClient(max_retries=0, num_ctx=override).chat(system="s", user="u")
+
+
+def test_num_ctx_override_defaults_to_the_text_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_endpoint(monkeypatch, prompt_tokens=1142, completion_tokens=166)
+
+    assert OllamaClient(max_retries=0).num_ctx == get_settings().INFERENCE_NUM_CTX
+
+
 def test_the_guard_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     """The same prompt would overflow again; retrying only burns GPU time."""
     num_ctx = get_settings().INFERENCE_NUM_CTX

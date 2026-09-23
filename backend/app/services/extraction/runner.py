@@ -64,10 +64,20 @@ class ExtractionResult:
     model_called: bool = False
 
 
-def _document_text(pages: list[PageText]) -> str:
+def _document_text(pages: list[PageText], vision_page_numbers: frozenset[int] = frozenset()) -> str:
+    """Text pages are inlined as before. A page routed to vision contributes no
+    text here — its own text layer is exactly what was judged unreliable — and
+    gets a marker instead, in the same ascending-page-number order the
+    corresponding images are attached in (see pipeline.py), so the model can
+    match each marker to the image that follows it."""
     chunks: list[str] = []
     for page in pages:
-        if page.text:
+        if page.page_number in vision_page_numbers:
+            chunks.append(
+                f"--- page {page.page_number}: no reliable text layer; read this "
+                "page from its attached image instead ---"
+            )
+        elif page.text:
             chunks.append(f"--- page {page.page_number} ---\n{page.text}")
     return "\n\n".join(chunks)
 
@@ -79,15 +89,28 @@ def run_extraction(
     pages: list[PageText],
     ubl_values: dict[str, str] | None = None,
     page_images: list[bytes] | None = None,
+    vision_page_numbers: frozenset[int] = frozenset(),
 ) -> ExtractionResult:
-    """Extract every requested field, honouring UBL precedence."""
+    """Extract every requested field, honouring UBL precedence.
+
+    ``vision_page_numbers`` (from ``extraction.routing.resolve_mode``) says
+    which pages' TEXT is unreliable — those are described by a marker instead
+    of inlined, and must be covered by ``page_images`` instead. A page not in
+    this set is inlined as text even when ``page_images`` is also given: mixed
+    mode sends each page by whichever path suits it, not everything through
+    the more expensive one.
+    """
     ubl_values = ubl_values or {}
     result = ExtractionResult()
 
-    document_text = _document_text(pages)
-    if not document_text.strip():
-        # Nothing readable. Do not call the model on an empty document — it
-        # would have nothing to work from and could only hallucinate.
+    document_text = _document_text(pages, vision_page_numbers)
+    has_inline_text = any(
+        page.text and page.page_number not in vision_page_numbers for page in pages
+    )
+    if not has_inline_text and not page_images:
+        # Nothing readable and nothing to look at either. Do not call the model
+        # on an empty document — it would have nothing to work from and could
+        # only hallucinate.
         logger.warning("extraction.no_text", extra={"pages": len(pages)})
         for spec in fields:
             result.values.append(_from_ubl_or_null(spec, ubl_values))

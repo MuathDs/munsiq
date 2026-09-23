@@ -8,6 +8,11 @@ page. So every numeric value is checked against the document's own text.
 
 from __future__ import annotations
 
+from app.services.extraction.routing import (
+    ARTICLE_SHARE_OF_REAL_TEXT,
+    SHATTERED_SINGLE_LETTER_SHARE,
+    fragmentation_ratios,
+)
 from app.services.normalize import has_arabic, normalize_for_match, normalize_text
 from app.services.validation.engine import (
     RuleResult,
@@ -224,16 +229,6 @@ def _encoding_finding(key: str, kind: str, value: str = "") -> RuleResult:
     )
 
 
-MIN_ARABIC_TOKENS_TO_JUDGE = 20
-"""Fewer than this and a few short words would decide the verdict."""
-
-SHATTERED_SINGLE_LETTER_SHARE = 0.25
-"""Real Arabic has a few one-letter words. A quarter of them is not real."""
-
-ARTICLE_SHARE_OF_REAL_TEXT = 0.05
-"""In ordinary Arabic well over 5% of tokens begin with the definite article."""
-
-
 @rule(
     "TEXT_LAYER_FRAGMENTED",
     Severity.WARNING,
@@ -250,12 +245,14 @@ def text_layer_is_intact(ctx: ValidationContext) -> list[RuleResult] | None:
     with no sign that anything went wrong. This is the sign.
 
     Both signatures are required, because either alone occurs in healthy text.
+    The thresholds live in extraction/routing.py, not here — the same numbers
+    decide whether a page is routed to the vision model, so this warning and
+    that routing decision can never quietly disagree.
     """
-    tokens = [t for t in ctx.page_text.split() if has_arabic(t)]
-    if len(tokens) < MIN_ARABIC_TOKENS_TO_JUDGE:
+    ratios = fragmentation_ratios(ctx.page_text)
+    if ratios is None:
         return None
-    single = sum(1 for t in tokens if len(t) == 1) / len(tokens)
-    article = sum(1 for t in tokens if t.startswith("ال")) / len(tokens)
+    single, article = ratios
     if single < SHATTERED_SINGLE_LETTER_SHARE or article >= ARTICLE_SHARE_OF_REAL_TEXT:
         return []
     return [

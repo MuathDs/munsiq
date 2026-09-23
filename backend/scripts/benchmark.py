@@ -39,11 +39,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pymupdf
 
+from app.config import get_settings
 from app.services.extraction.client import OllamaClient
 from app.services.extraction.prompts import parse_schema
+from app.services.extraction.routing import ExtractionMode, resolve_mode
 from app.services.extraction.runner import ExtractedValue, run_extraction
 from app.services.normalize import normalize_for_match, normalize_text
 from app.services.pagetext import extract_page_text
+from app.services.raster import rasterize_pages
 from scripts.seed_demo import INVOICE_SCHEMA
 
 SAMPLES = Path(__file__).resolve().parents[2] / "samples" / "test"
@@ -113,30 +116,54 @@ class Tally:
         return self.correct + self.wrong + self.null_miss + self.false_value
 
 
+def _record(tally: Tally, key: str, expected: str | None, value: ExtractedValue | None) -> None:
+    got = value.value if value else None
+    flagged = value is not None and value.validation_state != "auto_validated"
+    if expected is None:
+        if got is None:
+            tally.correct += 1
+        else:
+            tally.false_value += 1
+    elif got is None:
+        tally.null_miss += 1
+        tally.silent_miss += 0 if flagged else 1
+    elif same(key, expected, got):
+        tally.correct += 1
+    else:
+        tally.wrong += 1
+        tally.wrong_but_flagged += 1 if flagged else 0
+
+
 @dataclass
 class Report:
     label: str
     fields: dict[str, Tally] = field(default_factory=dict)
+    # Second cut of the same counts, grouped by PDF producer or by which path
+    # (text/vision) read that document — outer key is the group, inner is the
+    # field. Populated only when the caller passes producer/path to add(); the
+    # plain-text default benchmark run leaves both empty, so its report and
+    # JSON shape are unchanged from before this existed.
+    by_producer: dict[str, dict[str, Tally]] = field(default_factory=dict)
+    by_path: dict[str, dict[str, Tally]] = field(default_factory=dict)
     seconds: float = 0.0
     documents: int = 0
 
-    def add(self, key: str, expected: str | None, value: ExtractedValue | None) -> None:
-        tally = self.fields.setdefault(key, Tally())
-        got = value.value if value else None
-        flagged = value is not None and value.validation_state != "auto_validated"
-        if expected is None:
-            if got is None:
-                tally.correct += 1
-            else:
-                tally.false_value += 1
-        elif got is None:
-            tally.null_miss += 1
-            tally.silent_miss += 0 if flagged else 1
-        elif same(key, expected, got):
-            tally.correct += 1
-        else:
-            tally.wrong += 1
-            tally.wrong_but_flagged += 1 if flagged else 0
+    def add(
+        self,
+        key: str,
+        expected: str | None,
+        value: ExtractedValue | None,
+        *,
+        producer: str | None = None,
+        path: str | None = None,
+    ) -> None:
+        _record(self.fields.setdefault(key, Tally()), key, expected, value)
+        if producer is not None:
+            group = self.by_producer.setdefault(producer, {})
+            _record(group.setdefault(key, Tally()), key, expected, value)
+        if path is not None:
+            group = self.by_path.setdefault(path, {})
+            _record(group.setdefault(key, Tally()), key, expected, value)
 
     def totals(self) -> Tally:
         out = Tally()
@@ -146,10 +173,25 @@ class Report:
         return out
 
 
-def run(label: str, directory: Path, only: list[str] | None) -> Report:
+def run(
+    label: str, directory: Path, only: list[str] | None, mode: ExtractionMode = "text"
+) -> Report:
+    """``mode`` mirrors ``EXTRACTION_MODE``: 'text' (the historical default here —
+    every document read as text, UBL and vision both ignored, so old benchmark
+    JSON stays comparable), 'vision' (every page as an image), or 'auto' (per
+    page, exactly what the pipeline itself decides).
+    """
     expected = json.loads((directory / "expected.json").read_text(encoding="utf-8"))
     fields = parse_schema(INVOICE_SCHEMA)
-    client = OllamaClient()
+    text_client = OllamaClient()
+    vision_client = None
+    settings = get_settings()
+    if mode != "text":
+        vision_client = OllamaClient(
+            base_url=settings.VISION_INFERENCE_BASE_URL or settings.INFERENCE_BASE_URL,
+            model=settings.VISION_MODEL,
+            num_ctx=settings.VISION_NUM_CTX,
+        )
     report = Report(label=label)
     for name in sorted(expected):
         if only and not any(o in name for o in only):
@@ -157,32 +199,81 @@ def run(label: str, directory: Path, only: list[str] | None) -> Report:
         started = time.monotonic()
         with pymupdf.open(directory / name) as doc:  # type: ignore[no-untyped-call]
             pages = [extract_page_text(p, i) for i, p in enumerate(doc, start=1)]
-        result = run_extraction(client=client, fields=fields, pages=pages)
+            producer = str(doc.metadata.get("producer") or "unknown").strip() or "unknown"
+            pdf_bytes = doc.tobytes()
+
+        resolved, vision_pages = resolve_mode(mode, pages)
+        page_images = None
+        if vision_pages:
+            rasters = rasterize_pages(
+                pdf_bytes,
+                vision_pages,
+                dpi=settings.VISION_RASTER_DPI,
+                quality=settings.WEBP_QUALITY,
+            )
+            page_images = [r.data for r in sorted(rasters, key=lambda r: r.page_number)]
+        if resolved == "vision":
+            assert vision_client is not None, "'vision' only comes back when mode != 'text'"
+            client = vision_client
+        else:
+            client = text_client
+        result = run_extraction(
+            client=client,
+            fields=fields,
+            pages=pages,
+            page_images=page_images,
+            vision_page_numbers=vision_pages,
+        )
         by_key = {v.field_key: v for v in result.values if v.row_index is None}
+        doc_path = "vision" if vision_pages else "text"
         for spec in fields:
-            report.add(spec.key, expected[name].get(spec.key), by_key.get(spec.key))
+            report.add(
+                spec.key,
+                expected[name].get(spec.key),
+                by_key.get(spec.key),
+                producer=producer,
+                path=doc_path,
+            )
         report.documents += 1
         elapsed = time.monotonic() - started
         report.seconds += elapsed
-        print(f"  {name:34} {elapsed:5.1f}s", flush=True)
+        print(f"  {name:34} {elapsed:5.1f}s  producer={producer!r} path={doc_path}", flush=True)
     return report
+
+
+def _field_table(fields: dict[str, Tally]) -> list[str]:
+    lines = [
+        f"{'field':24} {'ok':>3} {'wrong':>5} {'null':>4} {'SILENT':>6} {'false':>5}   accuracy"
+    ]
+    for key, t in fields.items():
+        lines.append(
+            f"{key:24} {t.correct:>3} {t.wrong:>5} {t.null_miss:>4} {t.silent_miss:>6} "
+            f"{t.false_value:>5}   {t.correct / t.total:>6.0%}"
+        )
+    return lines
 
 
 def render(report: Report) -> str:
     lines = [
         f"[{report.label}]  {report.documents} invoices, {report.seconds:.0f}s",
-        f"{'field':24} {'ok':>3} {'wrong':>5} {'null':>4} {'SILENT':>6} {'false':>5}   accuracy",
+        *_field_table(report.fields),
     ]
-    for key, t in report.fields.items():
-        lines.append(
-            f"{key:24} {t.correct:>3} {t.wrong:>5} {t.null_miss:>4} {t.silent_miss:>6} "
-            f"{t.false_value:>5}   {t.correct / t.total:>6.0%}"
-        )
     t = report.totals()
     lines.append(
         f"{'ALL':24} {t.correct:>3} {t.wrong:>5} {t.null_miss:>4} {t.silent_miss:>6} "
         f"{t.false_value:>5}   {t.correct / t.total:>6.0%}"
     )
+    # Breakdowns only earn their space when there is more than one group to
+    # compare — a single-producer, text-only run (the historical default)
+    # prints exactly as it always did.
+    if len(report.by_path) > 1:
+        for path_name, fields in sorted(report.by_path.items()):
+            lines.append(f"\n-- path={path_name} --")
+            lines.extend(_field_table(fields))
+    if len(report.by_producer) > 1:
+        for producer_name, fields in sorted(report.by_producer.items()):
+            lines.append(f"\n-- producer={producer_name!r} --")
+            lines.extend(_field_table(fields))
     return "\n".join(lines)
 
 
@@ -191,6 +282,14 @@ def load(label: str, directory: Path) -> Report:
     return Report(
         label=raw["label"],
         fields={k: Tally(**v) for k, v in raw["fields"].items()},
+        by_producer={
+            group: {k: Tally(**v) for k, v in fields.items()}
+            for group, fields in raw.get("by_producer", {}).items()
+        },
+        by_path={
+            group: {k: Tally(**v) for k, v in fields.items()}
+            for group, fields in raw.get("by_path", {}).items()
+        },
         seconds=raw["seconds"],
         documents=raw["documents"],
     )
@@ -223,14 +322,20 @@ def main() -> int:
     parser.add_argument("--dir", type=Path, default=SAMPLES)
     parser.add_argument("--only", nargs="*", help="substrings of filenames to include")
     parser.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"))
+    parser.add_argument(
+        "--mode",
+        choices=("text", "vision", "auto"),
+        default="text",
+        help="forced EXTRACTION_MODE for this run (default: text, the historical behaviour)",
+    )
     args = parser.parse_args()
 
     if args.compare:
         print(compare(load(args.compare[0], args.dir), load(args.compare[1], args.dir)))
         return 0
 
-    print(f"benchmark '{args.label}' — model reads every invoice, UBL ignored")
-    report = run(args.label, args.dir, args.only)
+    print(f"benchmark '{args.label}' [mode={args.mode}] — model reads every invoice, UBL ignored")
+    report = run(args.label, args.dir, args.only, mode=args.mode)
     (args.dir / f"benchmark-{args.label}.json").write_text(
         json.dumps(
             {
@@ -238,6 +343,14 @@ def main() -> int:
                 "seconds": report.seconds,
                 "documents": report.documents,
                 "fields": {k: asdict(v) for k, v in report.fields.items()},
+                "by_producer": {
+                    group: {k: asdict(v) for k, v in fields.items()}
+                    for group, fields in report.by_producer.items()
+                },
+                "by_path": {
+                    group: {k: asdict(v) for k, v in fields.items()}
+                    for group, fields in report.by_path.items()
+                },
             },
             indent=2,
         ),

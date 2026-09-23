@@ -35,9 +35,10 @@ from app.services import storage as storage_mod
 from app.services.extraction.client import OllamaClient
 from app.services.extraction.grounding import ground_value
 from app.services.extraction.prompts import parse_line_item_schema, parse_schema
+from app.services.extraction.routing import resolve_mode
 from app.services.extraction.runner import ExtractedValue, ExtractionResult, run_extraction
 from app.services.pagetext import PageText, TextSource, extract_page_text
-from app.services.raster import TooManyPagesError, rasterize
+from app.services.raster import TooManyPagesError, rasterize, rasterize_pages
 from app.services.ubl import (
     MalformedPDFError,
     MalformedXMLError,
@@ -59,6 +60,9 @@ class PipelineOutcome:
     page_count: int = 0
     field_count: int = 0
     degraded_pages: list[int] = field(default_factory=list)
+    vision_pages: list[int] = field(default_factory=list)
+    """Pages actually sent to the model as an image. Empty whenever Step Zero
+    answered (no model call) or every page's text was trusted as-is."""
     blockers: list[str] = field(default_factory=list)
     status: str = "to_review"
     error: str | None = None
@@ -159,6 +163,10 @@ async def _process(
     # 4. Extract — skipped entirely when Step Zero answered
     # ---------------------------------------------------------------- #
     fields = parse_schema(definition)
+    # Per-page provenance for the pages table. None means "no model call was
+    # made for this page" — Step Zero answered, so no routing decision was ever
+    # needed. Set in the model branch below when the model actually runs.
+    extraction_paths: dict[int, str | None] = {p.page_number: None for p in pages}
     if ubl_values:
         result = ExtractionResult(values=[], model="", latency_ms=0, model_called=False)
         covered = 0
@@ -223,14 +231,53 @@ async def _process(
             extra={"document_id": str(document_id), "ubl_fields": covered},
         )
     else:
-        client = OllamaClient()
-        images_for_model = (
-            [images[i].data for i in range(min(len(images), 3))]
-            if settings.EXTRACTION_USE_VISION
-            else None
-        )
+        mode, wants_vision = resolve_mode(settings.EXTRACTION_MODE, pages)
+        # Cap the number of pages actually rasterized and attached as images: a
+        # page beyond the cap falls back to being inlined as plain text (its own,
+        # possibly unreliable, text layer) rather than being marked "see the
+        # attached image" with no image behind it — see MAX_VISION_PAGES.
+        vision_pages = frozenset(sorted(wants_vision)[: settings.MAX_VISION_PAGES])
+        outcome.vision_pages = sorted(vision_pages)
+
+        vision_images: list[bytes] | None = None
+        if vision_pages:
+            rasters = rasterize_pages(
+                pdf_bytes,
+                vision_pages,
+                dpi=settings.VISION_RASTER_DPI,
+                quality=settings.WEBP_QUALITY,
+            )
+            vision_images = [r.data for r in sorted(rasters, key=lambda r: r.page_number)]
+
+        if mode == "vision":
+            # A separate model, base URL and context budget — see config.py.
+            # Falls back to the text endpoint when no vision-specific one is set,
+            # so a local single-Ollama setup needs no extra configuration.
+            client = OllamaClient(
+                base_url=settings.VISION_INFERENCE_BASE_URL or settings.INFERENCE_BASE_URL,
+                model=settings.VISION_MODEL,
+                num_ctx=settings.VISION_NUM_CTX,
+            )
+        else:
+            client = OllamaClient()
+
         result = run_extraction(
-            client=client, fields=fields, pages=pages, page_images=images_for_model
+            client=client,
+            fields=fields,
+            pages=pages,
+            page_images=vision_images,
+            vision_page_numbers=vision_pages,
+        )
+        for p in pages:
+            extraction_paths[p.page_number] = "vision" if p.page_number in vision_pages else "text"
+        logger.info(
+            "pipeline.extraction_routed",
+            extra={
+                "document_id": str(document_id),
+                "mode": mode,
+                "vision_pages": outcome.vision_pages,
+                "model": result.model,
+            },
         )
 
     outcome.model_called = result.model_called
@@ -280,10 +327,11 @@ async def _process(
             await session.execute(
                 sql(
                     "INSERT INTO pages (org_id, document_id, page_number, image_key, "
-                    "width_px, height_px, ocr_text, text_source) "
-                    "VALUES (:org, :doc, :n, :key, :w, :h, :txt, :src) "
+                    "width_px, height_px, ocr_text, text_source, extraction_path) "
+                    "VALUES (:org, :doc, :n, :key, :w, :h, :txt, :src, :path) "
                     "ON CONFLICT (document_id, page_number) DO UPDATE SET "
-                    "ocr_text = EXCLUDED.ocr_text, text_source = EXCLUDED.text_source"
+                    "ocr_text = EXCLUDED.ocr_text, text_source = EXCLUDED.text_source, "
+                    "extraction_path = EXCLUDED.extraction_path"
                 ),
                 {
                     "org": org_id,
@@ -294,6 +342,7 @@ async def _process(
                     "h": page.height_px,
                     "txt": page.text or None,
                     "src": page.source.value,
+                    "path": extraction_paths.get(page.page_number),
                 },
             )
 
