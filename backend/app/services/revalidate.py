@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from decimal import Decimal
 
 from sqlalchemy import text as sql
@@ -40,14 +41,26 @@ logger = logging.getLogger(__name__)
 NUMERIC_TYPES = frozenset({"decimal", "number", "integer", "money"})
 
 
+@dataclass(frozen=True)
+class RevalidateOutcome:
+    report: ValidationReport
+    finding_ids: list[uuid.UUID]
+    """The validation_results row id each ``report.results[i]`` was written
+    under, same order, same length. RuleResult itself carries no id — it is
+    computed in memory before anything is persisted — so this is the only way
+    a caller can tell two same-rule-code findings apart."""
+
+
 async def revalidate_annotation(
     session: AsyncSession, org_id: uuid.UUID, annotation_id: uuid.UUID
-) -> ValidationReport:
+) -> RevalidateOutcome:
     """Rebuild the context from stored state, re-run every rule, replace findings.
 
-    Returns the fresh report. The caller is inside a transaction, so either all
-    of it lands or none of it does — an annotation is never left with half its
-    findings replaced.
+    Returns the fresh report AND the database id each result was written under,
+    aligned 1:1 with ``report.results`` — a rule firing on two fields shares a
+    code, and a caller rendering a list of findings needs something else to key
+    on. The caller is inside a transaction, so either all of it lands or none
+    of it does — an annotation is never left with half its findings replaced.
     """
     context = await _context_from_db(session, org_id, annotation_id)
     report = run_rules(context)
@@ -58,12 +71,13 @@ async def revalidate_annotation(
         sql("DELETE FROM validation_results WHERE annotation_id = :a"),
         {"a": annotation_id},
     )
+    finding_ids: list[uuid.UUID] = []
     for result in report.results:
-        await session.execute(
+        finding_id = await session.scalar(
             sql(
                 "INSERT INTO validation_results (org_id, annotation_id, rule_code, severity, "
                 "message_ar, message_en, field_key, passed) "
-                "VALUES (:org, :ann, :code, :sev, :ar, :en, :key, :passed)"
+                "VALUES (:org, :ann, :code, :sev, :ar, :en, :key, :passed) RETURNING id"
             ),
             {
                 "org": org_id,
@@ -76,6 +90,8 @@ async def revalidate_annotation(
                 "passed": result.passed,
             },
         )
+        assert finding_id is not None  # RETURNING id always yields exactly one row
+        finding_ids.append(finding_id)
 
     blocking = report.blocking_field_keys
     await session.execute(
@@ -103,7 +119,7 @@ async def revalidate_annotation(
         "revalidate.done",
         extra={"annotation_id": str(annotation_id), "blockers": len(report.blockers)},
     )
-    return report
+    return RevalidateOutcome(report=report, finding_ids=finding_ids)
 
 
 async def _context_from_db(

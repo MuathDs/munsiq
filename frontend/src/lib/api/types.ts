@@ -51,6 +51,10 @@ export interface SchemaField {
 }
 
 export interface ValidationFinding {
+  /** The validation_results row's own id. Two findings can share a rule_code
+   * (the same rule failing on two different fields) — key lists on this, not
+   * on rule_code alone. */
+  id: string;
   rule_code: string;
   severity: Severity;
   passed: boolean;

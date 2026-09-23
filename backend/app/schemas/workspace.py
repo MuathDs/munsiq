@@ -59,6 +59,10 @@ class ExtractedFieldOut(BaseModel):
 
 
 class ValidationFinding(BaseModel):
+    id: uuid.UUID
+    """The validation_results row's own id. Two findings can share a rule_code
+    (the same rule failing on two different fields) — this is what a caller
+    keys a list on instead, so nothing collides."""
     rule_code: str
     severity: Literal["info", "warning", "error"]
     passed: bool

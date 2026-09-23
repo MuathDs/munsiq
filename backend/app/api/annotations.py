@@ -141,7 +141,7 @@ async def get_annotation(
     finding_rows = (
         await session.execute(
             text(
-                "SELECT rule_code, severity, passed, message_ar, message_en, field_key "
+                "SELECT id, rule_code, severity, passed, message_ar, message_en, field_key "
                 "FROM validation_results WHERE annotation_id = :id "
                 "ORDER BY passed, rule_code"
             ),
@@ -211,6 +211,7 @@ def _field_out(row: Any) -> ExtractedFieldOut:
 
 def _finding_out(row: Any) -> ValidationFinding:
     return ValidationFinding(
+        id=row.id,
         rule_code=row.rule_code,
         severity=row.severity,
         passed=bool(row.passed),
@@ -321,7 +322,8 @@ async def patch_fields(
         )
         applied += 1
 
-    report = await revalidate_annotation(session, org_id, annotation_id)
+    outcome = await revalidate_annotation(session, org_id, annotation_id)
+    report = outcome.report
     field_rows = (await session.execute(text(FIELD_COLUMNS), {"id": annotation_id})).all()
 
     return CorrectionResult(
@@ -331,6 +333,7 @@ async def patch_fields(
         fields=[_field_out(r) for r in field_rows],
         findings=[
             ValidationFinding(
+                id=finding_id,
                 rule_code=r.code,
                 severity=r.severity.value,
                 passed=r.passed,
@@ -338,7 +341,7 @@ async def patch_fields(
                 message_en=r.message_en,
                 field_key=r.field_key,
             )
-            for r in report.results
+            for r, finding_id in zip(report.results, outcome.finding_ids, strict=True)
         ],
     )
 
@@ -388,7 +391,7 @@ async def confirm_annotation(
     unresolved = (
         await session.execute(
             text(
-                "SELECT rule_code, field_key, message_ar, message_en "
+                "SELECT id, rule_code, field_key, message_ar, message_en "
                 "FROM validation_results "
                 "WHERE annotation_id = :id AND severity = 'error' AND passed = false "
                 "ORDER BY rule_code"
@@ -407,6 +410,7 @@ async def confirm_annotation(
                 ),
                 "blockers": [
                     {
+                        "id": str(r.id),
                         "rule_code": r.rule_code,
                         "field_key": r.field_key,
                         "message_ar": r.message_ar,

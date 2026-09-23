@@ -471,23 +471,47 @@ def decode_zatca_qr(b64: str) -> dict[int, str | bytes]:
 TRN_LENGTH: Final[int] = 15
 TRN_REQUIRED_PREFIX: Final[str] = "3"
 TRN_REQUIRED_SUFFIX: Final[str] = "3"
-TRN_VAT_MARKER_POSITION: Final[int] = 10
-"""Zero-based index of the 11th digit, which ZATCA fixes at '1'."""
-TRN_VAT_MARKER_VALUE: Final[str] = "1"
+TRN_VAT_TAX_TYPE: Final[str] = "03"
+"""The last two digits are the registration's tax type; '03' is VAT. Not
+enforced by ``validate_trn`` — see ``trn_tax_type``."""
 
 
 def validate_trn(trn: str) -> bool:
     """Return True if ``trn`` is a structurally valid Saudi VAT registration number.
 
-    A Saudi TRN is 15 digits, begins with 3, ends with 3, and carries '1' in the
-    11th position. This is a structural check only — it proves the number is
+    THE RULE THIS REPLACES WAS WRONG. A Saudi TRN is documented as: 1 digit
+    country code (3), 8 serial digits, 1 check digit, 3 branch digits (000 for
+    the head office), 2 tax-type digits. An earlier version of this function
+    additionally required the 11th digit — the FIRST BRANCH DIGIT — to be '1'.
+    That digit is 0 for every head-office registration, so the old rule
+    rejected most real Saudi companies; it blocked a real invoice's two
+    otherwise-valid TRNs. There was never a ZATCA source for that constraint.
+
+    So this checks only what is public and stable: 15 digits, starting and
+    ending with 3. The check digit (position 10) has no published algorithm,
+    so there is nothing to verify there — this was called "checksum" before
+    and never actually computed one; see ``rules/zatca.py``'s TRN_FORMAT
+    (renamed from TRN_CHECKSUM for the same reason). This proves the number is
     well-formed, not that it is registered to anyone.
     """
     candidate = trn.strip().replace(" ", "").replace("-", "")
-    if len(candidate) != TRN_LENGTH or not candidate.isdigit():
-        return False
     return (
-        candidate.startswith(TRN_REQUIRED_PREFIX)
+        len(candidate) == TRN_LENGTH
+        and candidate.isdigit()
+        and candidate.startswith(TRN_REQUIRED_PREFIX)
         and candidate.endswith(TRN_REQUIRED_SUFFIX)
-        and candidate[TRN_VAT_MARKER_POSITION] == TRN_VAT_MARKER_VALUE
     )
+
+
+def trn_tax_type(trn: str) -> str | None:
+    """The last two digits (the registration's tax type), or None if malformed.
+
+    Informational only — ``rules/zatca.py`` uses this for a WARNING when it is
+    not '03' (VAT), never a validity verdict. A well-formed TRN with a
+    different tax type (customs, excise, ...) is not wrong; it is just worth a
+    second look on a VAT invoice.
+    """
+    if not validate_trn(trn):
+        return None
+    candidate = trn.strip().replace(" ", "").replace("-", "")
+    return candidate[-2:]

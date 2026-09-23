@@ -353,7 +353,7 @@ async def _process(
                 },
             )
 
-        await _record_findings(session, org_id, annotation_id, pages, result)
+        await _record_findings(session, org_id, annotation_id, pages, result, fields)
         await _record_rule_results(session, org_id, annotation_id, report)
 
     logger.info(
@@ -387,11 +387,25 @@ async def _load_schema(session, queue_id) -> tuple[uuid.UUID | None, dict[str, A
     return row.id, row.definition
 
 
-async def _record_findings(session, org_id, annotation_id, pages, result) -> None:  # type: ignore[no-untyped-def]
-    """Write validation_results for degraded pages and UBL/model disagreements."""
+async def _record_findings(session, org_id, annotation_id, pages, result, fields) -> None:  # type: ignore[no-untyped-def]
+    """Write validation_results for degraded pages and UBL/model disagreements.
+
+    A degraded page used to be an unconditional blocking error whenever the OCR
+    engine could not read its script — even a nearly blank filler page on an
+    otherwise-fine invoice. It now blocks only when the document as a whole has
+    nothing readable, or a REQUIRED field is missing (a plausible sign that the
+    value this page was supposed to carry never arrived). A blank page that sat
+    alongside a fully-readable invoice is worth a warning, not a refusal.
+    """
+    any_usable_page = any(not p.is_degraded for p in pages)
+    header_values = {v.field_key: v.value for v in result.values if v.row_index is None}
+    missing_required = any(header_values.get(spec.key) is None for spec in fields if spec.required)
     for page in pages:
         if not page.is_degraded:
             continue
+        blocking = page.source is TextSource.OCR_UNSUPPORTED_SCRIPT and (
+            not any_usable_page or missing_required
+        )
         await session.execute(
             sql(
                 "INSERT INTO validation_results (org_id, annotation_id, rule_code, severity, "
@@ -402,7 +416,7 @@ async def _record_findings(session, org_id, annotation_id, pages, result) -> Non
                 "org": org_id,
                 "ann": annotation_id,
                 "code": _RULE_FOR_SOURCE.get(page.source, "PAGE_TEXT_UNAVAILABLE"),
-                "sev": "error" if page.source is TextSource.OCR_UNSUPPORTED_SCRIPT else "warning",
+                "sev": "error" if blocking else "warning",
                 "ar": _AR_MESSAGE.get(page.source, "تعذّر استخراج نص هذه الصفحة.").format(
                     page=page.page_number
                 ),

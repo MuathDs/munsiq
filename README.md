@@ -45,7 +45,7 @@ flowchart TD
     G --> E
     D --> H["Grounding<br/>value → normalized bbox 0.0–1.0"]
     E --> H
-    H --> I["Deterministic validation<br/>16 rules · bilingual messages<br/>errors block confirmation"]
+    H --> I["Deterministic validation<br/>17 rules · bilingual messages<br/>errors block confirmation"]
     I --> J[("PostgreSQL<br/>RLS FORCEd per tenant")]
     J --> K["Review workspace<br/>ar/en · RTL · provenance badges<br/>click a field → box on the page"]
     K -->|"corrections → revalidate"| I
@@ -98,8 +98,8 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **398 passed, 1 skipped, 1 xfailed — 21m00s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-21. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
-| Validation rules | **16** (10 blocking errors, 6 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-21 |
+| Backend test suite | **423 passed, 1 skipped, 1 xfailed — 21m36s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-23. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Validation rules | **17** (10 blocking errors, 7 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-23 |
 | Validation coverage | **100% statements and branches** — 473 statements, 156 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 98 tests, **1.5 s** without coverage instrumentation (the rules are pure functions) |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
 | Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies`, 2026-09-20 |
@@ -269,7 +269,7 @@ It prints what each should trigger, computed by dry-running the deterministic
 stages on the files it wrote: two carry a signed UBL (English, Arabic-primary) and
 raise nothing; two are digital without one (English, Arabic) and go to the model;
 `05_arithmetic_error.pdf` fires `VAT_CALC_MISMATCH`; `06_invalid_trn.pdf` fires
-`TRN_CHECKSUM`. The last four need Ollama running. The UBL in them is
+`TRN_FORMAT`. The last four need Ollama running. The UBL in them is
 ZATCA-*shaped* and read back by the library that built it, so it shows the code
 is self-consistent, not that it reads certified output.
 

@@ -231,6 +231,30 @@ async def test_findings_carry_both_languages(fx: Fx) -> None:
     assert any("؀" <= ch <= "ۿ" for ch in finding["message_ar"])
 
 
+async def test_two_findings_of_the_same_rule_have_distinct_ids(fx: Fx) -> None:
+    """One rule firing on two fields — the real shape that collided as a React
+    key when only rule_code was used to identify a finding on the wire."""
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql(
+                "INSERT INTO validation_results (org_id, annotation_id, rule_code, "
+                "severity, message_ar, message_en, field_key, passed) VALUES "
+                "(:o, :a, 'GRAND_TOTAL_MISMATCH', 'error', :ar, :en, 'subtotal', false)"
+            ),
+            {"o": fx.org_id, "a": fx.annotation_id, "ar": "رسالة ثانية.", "en": "Second message."},
+        )
+
+    async with client_as(fx.org_id) as c:
+        body = (await c.get(f"/api/v1/annotations/{fx.annotation_id}")).json()
+
+    matching = [f for f in body["findings"] if f["rule_code"] == "GRAND_TOTAL_MISMATCH"]
+    assert len(matching) == 2
+    assert {f["field_key"] for f in matching} == {"total_amount", "subtotal"}
+    ids = [f["id"] for f in matching]
+    assert all(ids)
+    assert len(set(ids)) == 2
+
+
 async def test_provenance_and_confidence_survive_the_wire(fx: Fx) -> None:
     """The provenance badge is the core differentiator — its inputs must arrive."""
     async with client_as(fx.org_id) as c:
@@ -301,6 +325,10 @@ async def test_a_wrong_correction_keeps_the_blocker(fx: Fx) -> None:
             json={"events": [{"field_key": "total_amount", "new_value": "88888.00"}]},
         )
         assert "GRAND_TOTAL_MISMATCH" in r.json()["blockers"]
+        # Revalidation deletes and re-inserts every row, so a finding's id from
+        # before a correction is never reused for the one after it.
+        finding = next(f for f in r.json()["findings"] if f["rule_code"] == "GRAND_TOTAL_MISMATCH")
+        assert finding["id"]
         confirm = await c.post(f"/api/v1/annotations/{fx.annotation_id}/confirm")
 
     assert confirm.status_code == 409

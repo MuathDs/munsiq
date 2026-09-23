@@ -48,6 +48,7 @@ import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import {
   useDebouncedFlush,
   useWorkspace,
+  type ConfirmBlocker,
   type SaveState,
   type WorkspaceState,
 } from "./useAnnotationReducer";
@@ -124,14 +125,17 @@ export function ValidationWorkspace({
       });
       if (response.status === 409) {
         const body = (await response.json()) as {
-          detail?: { detail?: string; blockers?: { rule_code: string }[] };
+          detail?: { detail?: string; blockers?: ConfirmBlocker[] };
         };
         // The server's sentence is English-only; the banner is composed here
         // from the blocker count so it reads correctly in either language.
+        // Each blocker keeps its own id — the same rule can fail on two
+        // different fields (seller and buyer TRN, say), and rule_code alone
+        // is not a safe React key for that list.
         dispatch({
           type: "confirm:blocked",
           message: t.errors.blockedTitle,
-          blockers: (body.detail?.blockers ?? []).map((b) => b.rule_code),
+          blockers: body.detail?.blockers ?? [],
         });
         return;
       }
@@ -451,7 +455,7 @@ function ConfirmBanner({
   onDismiss,
 }: {
   message: string;
-  blockers: string[];
+  blockers: ConfirmBlocker[];
   t: Messages;
   onJump: () => void;
   onDismiss: () => void;
@@ -471,13 +475,16 @@ function ConfirmBanner({
       ) : null}
       {count > 0 ? (
         <div className="hidden min-w-0 items-center gap-1.5 lg:flex">
-          {blockers.map((code) => (
+          {/* One pill per BLOCKER, not per distinct code: the same rule failing
+              on two fields (seller and buyer TRN, say) is two problems, shown
+              as two pills, each keyed by its own finding id. */}
+          {blockers.map((blocker) => (
             <code
-              key={code}
+              key={blocker.id}
               dir="ltr"
               className="rounded-[6px] bg-danger/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-danger"
             >
-              {code}
+              {blocker.rule_code}
             </code>
           ))}
         </div>

@@ -80,9 +80,9 @@ Back on the dashboard, click the *Blocked* row: invoice `EPS-2026-1187`.
   attachment, so the model ran (164.9 s for this document).
 * All 11 badges are amber, *Extracted (AI)*, each with a **confidence bar**
   (values between 0.857 and 1.000).
-* The compliance chip reads **ZATCA 1/1**, not 4/4. Only the VAT-number checksum
-  had anything to check: with no attachment there is no embedded UBL and no QR to
-  decode. A check that never ran is not reported as passed.
+* The compliance chip reads **ZATCA 1/1**, not 4/4. Only the VAT-number format
+  check had anything to check: with no attachment there is no embedded UBL and
+  no QR to decode. A check that never ran is not reported as passed.
 * A red card sits at the top of the field pane: **1 finding blocks
   confirmation** — `GRAND_TOTAL_MISMATCH`, *"Subtotal (18400.00) plus VAT
   (2760.00) is 21160.00, but the stated total is 21610.00."*

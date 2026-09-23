@@ -64,7 +64,7 @@ def test_the_arithmetic_error_is_only_the_vat_line(
 
 def test_the_invalid_trn_is_only_the_sellers(generated: dict[str, tuple[bytes, object]]) -> None:
     assert generated["06_invalid_trn.pdf"][1].blockers == [  # type: ignore[attr-defined]
-        "TRN_CHECKSUM(seller_trn)"
+        "TRN_FORMAT(seller_trn)"
     ]
 
 

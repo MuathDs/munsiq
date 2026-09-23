@@ -38,6 +38,7 @@ and succeeded" from "this check never ran".
 | `VAT_CALC_MISMATCH` | error | subtotal × rate = VAT amount |
 | `GRAND_TOTAL_MISMATCH` | error | subtotal + VAT = total |
 | `NEGATIVE_AMOUNT` | error | no negative amounts unless it is a credit note |
+| `SUBTOTAL_EQUALS_TOTAL` | warning | subtotal equals the total with no VAT stated — likely a tax-inclusive total copied into the wrong field |
 
 All comparisons use `Decimal` with explicit `quantize` and a one-halala
 tolerance. **Never float.** `0.1 + 0.2 != 0.3` in binary floating point, and a
@@ -51,7 +52,8 @@ schema does not request them, so these fire only for documents parsed from UBL.
 
 | Code | Severity | Check |
 | --- | --- | --- |
-| `TRN_CHECKSUM` | error | seller and buyer VAT numbers pass `validate_trn` |
+| `TRN_FORMAT` | error | seller and buyer VAT numbers pass `validate_trn` |
+| `TRN_TAX_TYPE_UNEXPECTED` | warning | a well-formed VAT number whose last two digits are not '03' |
 | `VAT_CATEGORY_VALID` | error | category is S, Z, E or O |
 | `VAT_RATE_CONSISTENT` | error | S ⇒ 15%, Z and E ⇒ 0% |
 | `INVOICE_TYPE_THRESHOLD` | warning | simplified invoice at or above SAR 1,000 |
@@ -62,6 +64,13 @@ schema does not request them, so these fire only for documents parsed from UBL.
 document the *supplier* should have issued. That is their compliance problem,
 not a reason to stop the buyer booking the invoice.
 
+`TRN_FORMAT` (renamed from `TRN_CHECKSUM`) checks only what is public and
+stable — 15 digits, starting and ending with 3. An earlier version also
+required the 11th digit (the first of three BRANCH digits, 0 for a head
+office) to be '1', which rejected most real Saudi companies; there is no
+published check-digit algorithm to verify beyond the shape. `validate_trn` in
+`app/services/ubl.py` has the full reasoning.
+
 ### Provenance — `rules/provenance.py`
 
 | Code | Severity | Check |
@@ -69,6 +78,7 @@ not a reason to stop the buyer booking the invoice.
 | `XML_PDF_MISMATCH` | error | a field's signed XML value disagrees with the model's reading |
 | `OCR_SUBSTRING_MISSING` | error | every numeric value appears in the page text |
 | `ARABIC_ENCODING_SUSPECT` | warning | PDF renders Arabic but XML party names are empty or mojibake |
+| `TEXT_LAYER_FRAGMENTED` | warning | the page's Arabic words look cut apart (many single letters, none starting with the definite article) |
 
 **`OCR_SUBSTRING_MISSING` is the primary anti-hallucination guard.** A model will
 happily produce a well-formed, plausible, wholly invented number. The one thing

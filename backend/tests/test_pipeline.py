@@ -272,6 +272,52 @@ async def test_page_without_text_layer_is_recorded_not_silently_empty(tenant, mo
     ), f"an unreadable page produced no validation finding: {codes}"
 
 
+async def test_a_degraded_filler_page_warns_instead_of_blocking(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A real invoice's nearly-empty page 2 raised OCR_SCRIPT_UNSUPPORTED as a
+    BLOCKING error, even though every required field was read from page 1's
+    signed UBL and page 2 held nothing the schema needed. A degraded page must
+    only block when the document as a whole has nothing readable, or a
+    required field is missing and this page is a plausible reason why.
+    """
+    org_id, queue_id = tenant
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", RecordingClient)
+
+    document_id = await _insert_document(
+        org_id, queue_id, fixtures.build_pdf_with_embedded_xml_and_blank_page()
+    )
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.error is None
+    assert outcome.has_embedded_ubl is True
+    assert 2 in outcome.degraded_pages, "page 2 must still be recorded as degraded"
+
+    async with get_sessionmaker()() as session, session.begin():
+        rows = (
+            await session.execute(
+                sql(
+                    "SELECT rule_code, severity FROM validation_results "
+                    "WHERE annotation_id = :a AND rule_code = 'OCR_SCRIPT_UNSUPPORTED'"
+                ),
+                {"a": outcome.annotation_id},
+            )
+        ).all()
+        # The two fields the schema requires (seller_trn, total_amount) plus
+        # invoice_number came from page 1's XML, so nothing required is missing.
+        missing_required = await session.scalar(
+            sql(
+                "SELECT count(*) FROM extracted_fields WHERE annotation_id = :a "
+                "AND field_key IN ('seller_trn', 'total_amount') AND value_extracted IS NULL"
+            ),
+            {"a": outcome.annotation_id},
+        )
+
+    assert rows, "the blank page must still be recorded as a finding"
+    assert missing_required == 0
+    assert all(r.severity == "warning" for r in rows), (
+        "no required field is missing, so a blank filler page must warn, not block"
+    )
+
+
 async def test_text_layer_page_is_recorded_as_such(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     org_id, queue_id = tenant
     monkeypatch.setattr(pipeline_mod, "OllamaClient", RecordingClient)

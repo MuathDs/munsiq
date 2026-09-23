@@ -13,6 +13,8 @@ from decimal import Decimal
 from app.services.ubl import (
     QR_TAG_TOTAL_WITH_VAT,
     QR_TAG_VAT_TOTAL,
+    TRN_VAT_TAX_TYPE,
+    trn_tax_type,
     validate_trn,
 )
 from app.services.validation.engine import (
@@ -37,7 +39,7 @@ VAT_AMOUNT = "vat_amount"
 
 
 @rule(
-    "TRN_CHECKSUM",
+    "TRN_FORMAT",
     Severity.ERROR,
     message_ar="الرقم الضريبي لا يطابق الصيغة المعتمدة من هيئة الزكاة والضريبة والجمارك.",
     message_en="A VAT registration number fails the ZATCA structural check.",
@@ -48,6 +50,13 @@ def trns_are_structurally_valid(ctx: ValidationContext) -> list[RuleResult] | No
     Structural only — it proves the number is well formed, not that it is
     registered to anybody. A buyer TRN is legitimately absent on simplified
     invoices, so absence is not a failure here.
+
+    Named TRN_FORMAT, not TRN_CHECKSUM: the check digit's algorithm is not
+    published anywhere, so nothing here has ever verified a checksum. An
+    earlier version of this rule also required the 11th digit to be '1' — that
+    digit is the first of three BRANCH digits, '0' for every head office, so
+    that constraint rejected most real Saudi companies and blocked a real
+    invoice's two otherwise-valid TRNs. See app/services/ubl.py, validate_trn.
     """
     findings: list[RuleResult] = []
     checked = 0
@@ -60,14 +69,58 @@ def trns_are_structurally_valid(ctx: ValidationContext) -> list[RuleResult] | No
             continue
         findings.append(
             failure(
-                "TRN_CHECKSUM",
+                "TRN_FORMAT",
                 message_ar=(
                     f"الرقم الضريبي «{value}» غير صالح. يجب أن يتكون من 15 رقماً، "
-                    f"وأن يبدأ بالرقم 3 وينتهي بالرقم 3، وأن يكون الرقم الحادي عشر 1."
+                    f"وأن يبدأ بالرقم 3 وينتهي بالرقم 3."
                 ),
                 message_en=(
-                    f"VAT number '{value}' is not valid: it must be 15 digits, start "
-                    f"with 3, end with 3, and carry '1' in the 11th position."
+                    f"VAT number '{value}' is not valid: it must be 15 digits, "
+                    f"starting and ending with 3."
+                ),
+                field_key=key,
+            )
+        )
+    if checked == 0:
+        return None
+    return findings
+
+
+@rule(
+    "TRN_TAX_TYPE_UNEXPECTED",
+    Severity.WARNING,
+    message_ar="آخر رقمين في الرقم الضريبي ليسا 03 (نوع ضريبة القيمة المضافة).",
+    message_en="The VAT number's last two digits are not '03' (the VAT tax type).",
+)
+def trn_tax_type_is_vat(ctx: ValidationContext) -> list[RuleResult] | None:
+    """A well-formed TRN whose tax type is not VAT — worth a second look, not a
+    block. A different tax type (customs, excise, ...) is not wrong on its own;
+    ZATCA does not publish a registry this could check against, so it is only
+    ever a warning. A malformed TRN has nothing to say here — TRN_FORMAT
+    already reports that.
+    """
+    findings: list[RuleResult] = []
+    checked = 0
+    for key in (SELLER_TRN, BUYER_TRN):
+        value = ctx.value(key)
+        if not value:
+            continue
+        tax_type = trn_tax_type(value)
+        if tax_type is None:
+            continue
+        checked += 1
+        if tax_type == TRN_VAT_TAX_TYPE:
+            continue
+        findings.append(
+            failure(
+                "TRN_TAX_TYPE_UNEXPECTED",
+                message_ar=(
+                    f"الرقم الضريبي «{value}» ينتهي بـ {tax_type}، وليس 03 "
+                    f"(ضريبة القيمة المضافة). قد يكون هذا صحيحاً لنوع تسجيل آخر."
+                ),
+                message_en=(
+                    f"VAT number '{value}' ends in {tax_type}, not '03' (VAT). This "
+                    f"may be correct for a different registration type."
                 ),
                 field_key=key,
             )

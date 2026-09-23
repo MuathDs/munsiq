@@ -19,13 +19,19 @@ from pypdf import PdfWriter
 # ZATCA QR (base64 TLV)
 # --------------------------------------------------------------------------- #
 SELLER_NAME: Final[str] = "شركة الجزيرة للصيانة الصناعية"
-SELLER_TRN: Final[str] = "310122393510003"
+SELLER_TRN: Final[str] = "310122393500003"
+"""The official ZATCA documentation sample TRN. It used to be written here as
+310122393510003 — a digit changed — because the validation rule at the time
+wrongly required the 11th digit (the first BRANCH digit, 0 for a head office)
+to be '1'. That rule blocked a real invoice's real TRNs and has been replaced
+with a format-only check (see app/services/ubl.py, validate_trn); restored to
+the actual sample once the fixture no longer needed to dodge it."""
 BUYER_NAME: Final[str] = "Jubail Maintenance Services Ltd."
 BUYER_TRN: Final[str] = "311111111110003"
-# Both TRNs above satisfy validate_trn: 15 digits, leading 3, trailing 3, and
-# '1' in the 11th position. Keep them valid — Phase 5's TRN_CHECKSUM rule runs
-# against this fixture, and a fixture that fails its own compliance rule makes
-# every downstream test ambiguous.
+# Both TRNs above satisfy validate_trn: 15 digits, leading 3, trailing 3. Keep
+# them valid — Phase 5's TRN_FORMAT rule runs against this fixture, and a
+# fixture that fails its own compliance rule makes every downstream test
+# ambiguous.
 QR_TIMESTAMP: Final[str] = "2026-02-10T11:35:00Z"
 QR_TOTAL_WITH_VAT: Final[str] = "52118.00"
 QR_VAT_TOTAL: Final[str] = "6798.00"
@@ -215,6 +221,31 @@ def build_pdf_with_embedded_xml(
     return buffer.getvalue()
 
 
+def build_pdf_with_embedded_xml_and_blank_page(
+    xml_bytes: bytes | None = None,
+    filename: str = "invoice.xml",
+) -> bytes:
+    """A compliant two-page invoice: page 1 is READABLE (a real text layer, the
+    way a genuine PDF/A-3 renders for a human) and carries the signed UBL; page
+    2 is a blank filler (no text layer, nothing for OCR to find — the shape of
+    a "nearly empty" trailing page on a real invoice). Every field this schema
+    asks for is satisfiable from page 1's XML alone, without ever reading page
+    1's own printed text or page 2 at all.
+    """
+    from pypdf import PdfReader
+
+    visible = build_pdf_with_text_layer()
+    reader = PdfReader(BytesIO(visible))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.add_blank_page(width=595, height=842)
+    writer.add_attachment(filename, xml_bytes if xml_bytes is not None else build_ubl_xml())
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def build_pdf_with_non_xml_attachment() -> bytes:
     """A PDF whose only attachment is not XML — Step Zero must return None."""
     writer = PdfWriter()
@@ -230,7 +261,7 @@ def build_pdf_with_text_layer(
         "TAX INVOICE",
         "Invoice No: SA-2026-0334",
         "Seller: Al Jazeera Industrial Maintenance",
-        "VAT No: 310122393510003",
+        "VAT No: 310122393500003",
         "Subtotal: 45320.00",
         "VAT 15%: 6798.00",
         "Total: 52118.00 SAR",
@@ -266,7 +297,7 @@ def build_pdf_with_text_layer_and_ubl() -> bytes:
         lines=(
             "TAX INVOICE",
             "Invoice No: SA-2026-0334",
-            "Seller VAT No: 310122393510003",
+            "Seller VAT No: 310122393500003",
             "Subtotal: 45,320.00",
             "VAT 15%: 6,798.00",
             "Total: 52,118.00 SAR",

@@ -23,6 +23,12 @@ import {
   type ValidationFinding,
 } from "@/lib/api/types";
 
+/** What the confirm endpoint's 409 body carries per blocking finding — enough
+ * to render one item AND key it uniquely, without pulling in the full
+ * ValidationFinding shape (severity/passed are implied: every one is an
+ * unresolved error, or it would not be here). */
+export type ConfirmBlocker = Pick<ValidationFinding, "id" | "rule_code" | "field_key">;
+
 const FLUSH_DELAY_MS = 800;
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
@@ -41,7 +47,7 @@ export interface WorkspaceState {
   rollback: Map<string, string | null>;
   save: SaveState;
   saveError: string | null;
-  confirmError: { message: string; blockers: string[] } | null;
+  confirmError: { message: string; blockers: ConfirmBlocker[] } | null;
   confirming: boolean;
 }
 
@@ -55,7 +61,7 @@ export type Action =
   | { type: "flush:fail"; message: string }
   | { type: "confirm:start" }
   | { type: "confirm:ok" }
-  | { type: "confirm:blocked"; message: string; blockers: string[] }
+  | { type: "confirm:blocked"; message: string; blockers: ConfirmBlocker[] }
   | { type: "confirm:dismiss" }
   | { type: "export:ok" };
 

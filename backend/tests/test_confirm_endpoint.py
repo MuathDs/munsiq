@@ -154,14 +154,36 @@ async def test_every_unresolved_blocker_is_reported_not_just_the_first(
 ) -> None:
     """Fixing one problem at a time is a miserable review loop."""
     await add_finding(annotation, "GRAND_TOTAL_MISMATCH", "error", passed=False)
-    await add_finding(annotation, "TRN_CHECKSUM", "error", passed=False)
+    await add_finding(annotation, "TRN_FORMAT", "error", passed=False)
     await add_finding(annotation, "VAT_CALC_MISMATCH", "error", passed=False)
 
     async with client_as(annotation.org_id) as client:
         response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
 
     codes = {b["rule_code"] for b in response.json()["detail"]["blockers"]}
-    assert codes == {"GRAND_TOTAL_MISMATCH", "TRN_CHECKSUM", "VAT_CALC_MISMATCH"}
+    assert codes == {"GRAND_TOTAL_MISMATCH", "TRN_FORMAT", "VAT_CALC_MISMATCH"}
+
+
+async def test_the_same_rule_firing_twice_gives_each_blocker_its_own_id(
+    annotation: Fixture,
+) -> None:
+    """A real invoice had this exact shape: one rule (the TRN check), two fields
+    (seller and buyer) both failing it. The frontend renders one item per
+    blocker and needs a key that does not collide — rule_code alone repeats.
+    """
+    await add_finding(annotation, "TRN_FORMAT", "error", passed=False, field_key="seller_trn")
+    await add_finding(annotation, "TRN_FORMAT", "error", passed=False, field_key="buyer_trn")
+
+    async with client_as(annotation.org_id) as client:
+        response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")
+
+    blockers = response.json()["detail"]["blockers"]
+    assert len(blockers) == 2
+    assert {b["rule_code"] for b in blockers} == {"TRN_FORMAT"}
+    assert {b["field_key"] for b in blockers} == {"seller_trn", "buyer_trn"}
+    ids = [b["id"] for b in blockers]
+    assert all(ids), "every blocker must carry its own id"
+    assert len(set(ids)) == 2, "two findings of the same rule must not share an id"
 
 
 # --------------------------------------------------------------------------- #
@@ -195,7 +217,7 @@ async def test_passing_error_severity_rules_do_not_block(annotation: Fixture) ->
     Guards against a query that filters on severity and forgets `passed`.
     """
     await add_finding(annotation, "GRAND_TOTAL_MISMATCH", "error", passed=True)
-    await add_finding(annotation, "TRN_CHECKSUM", "error", passed=True)
+    await add_finding(annotation, "TRN_FORMAT", "error", passed=True)
 
     async with client_as(annotation.org_id) as client:
         response = await client.post(f"/api/v1/annotations/{annotation.annotation_id}/confirm")

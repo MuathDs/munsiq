@@ -221,6 +221,54 @@ FIXED, and worth remembering why:
   into several letters (`test_reading_order_never_changes_the_word_count`).
   `scripts/text_layer_report.py`'s numbers were always describing MuPDF's
   tokenizer output, not ours.
+- **The TRN rule was wrong — my error in the original plan** (fixed
+  2026-09-23). It required the 11th digit to be '1'. A Saudi TRN's 11th digit
+  is the first of three BRANCH digits (000 = head office), '0' for every head
+  office, so that rule rejected most real Saudi companies and blocked a real
+  invoice's two otherwise-valid TRNs (both
+  head offices). `validate_trn` now checks only what is public and stable: 15
+  digits, starting and ending with 3. The check digit's algorithm (position
+  10) is not published anywhere, so nothing here has ever verified a
+  checksum — the rule is renamed `TRN_FORMAT` (from `TRN_CHECKSUM`)
+  everywhere, messages included, because "checksum" claimed a verification
+  this code cannot do. `TRN_TAX_TYPE_UNEXPECTED` (new, warning) flags a
+  well-formed TRN whose last two digits are not '03' (VAT) — informational
+  only, since ZATCA publishes no registry to check other tax types against.
+  The Phase 1 fixture also dodged the old rule: `SELLER_TRN` in
+  `tests/fixtures.py` was `310122393510003` where the official ZATCA sample is
+  `310122393500003` — restored, and it is now a valid case everywhere it
+  appears, including `samples/test/06_invalid_trn.pdf`'s companion (that one
+  is still invalid, now because it does not end in 3, not because of a digit
+  that was never really required).
+- **A degraded filler page blocked confirmation on its own.** A page with no
+  usable text (`OCR_SCRIPT_UNSUPPORTED`) was an unconditional blocking error —
+  even a nearly blank trailing page on an otherwise fully-readable invoice.
+  Fixed 2026-09-23: it blocks only when the document as a whole has nothing
+  readable, or a REQUIRED field is still missing after extraction (a plausible
+  sign the value this page was supposed to carry never arrived). A blank page
+  next to a fully-readable invoice now warns instead of refusing confirmation.
+  `tests/test_pipeline.py::test_a_degraded_filler_page_warns_instead_of_
+  blocking`. On the real invoice that surfaced this, the fix does not fully
+  clear the block — a required field (`subtotal`) is genuinely still missing,
+  so `OCR_SCRIPT_UNSUPPORTED` correctly stays an error under the new rule too.
+  That is the fix working as intended: it now blocks for the true remaining
+  reason, not an unrelated blank page.
+- **Duplicate React keys when a rule fires on two fields.** `rule_code` alone
+  was the key for the blocker banner, the blocking-findings panel and each
+  field's own findings list — the TRN rule firing on both `seller_trn` and
+  `buyer_trn` on the same real invoice collided ("Encountered two children
+  with the same key, TRN_CHECKSUM"). Not TRN-specific: any rule firing twice
+  reproduces it. `validation_results` already has its own `id`; `ValidationFinding`
+  now carries it end to end (`GET /annotations/{id}`, the PATCH corrections
+  response, and the CONFIRM 409 body), and every list in the workspace keys on
+  it — `BlockerList`, `FieldRow`'s per-field findings, and the confirm
+  banner's blocker pills, which used to render bare rule-code strings and
+  now render one pill per finding. `revalidate_annotation` returns the
+  inserted ids alongside its report (`RevalidateOutcome`) since `RuleResult`
+  itself is computed in memory before anything is persisted.
+  `tests/test_confirm_endpoint.py::test_the_same_rule_firing_twice_gives_
+  each_blocker_its_own_id`, `tests/test_workspace_api.py::test_two_findings_
+  of_the_same_rule_have_distinct_ids`.
 - **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
   `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
   and a fixed seed changed nothing (greedy decoding). Consecutive documents share

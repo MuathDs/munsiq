@@ -47,7 +47,7 @@ export function BlockerList({
 
       <ul className="mt-3.5 space-y-2">
         {blocking.map((finding) => (
-          <li key={`${finding.rule_code}-${finding.field_key ?? ""}`}>
+          <li key={finding.id}>
             <button
               type="button"
               disabled={!finding.field_key}

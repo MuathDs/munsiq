@@ -175,7 +175,7 @@ export function FieldRow({
         <ul className="mt-3 space-y-1.5 border-t border-line pt-3">
           {failures.map((finding) => (
             <li
-              key={finding.rule_code}
+              key={finding.id}
               className={`flex gap-2 text-[12px] leading-5 ${
                 finding.severity === "error" ? "text-danger" : "text-warning"
               }`}

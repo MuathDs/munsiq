@@ -13,7 +13,7 @@ text-layer reading, grounding, the rules engine) on the files it just wrote.
   3  digital, English  no attachment; the model reads a clean invoice
   4  digital, Arabic   no attachment; the model reads an Arabic invoice
   5  arithmetic error  no attachment; the printed VAT is not 15% of the subtotal
-  6  invalid TRN       no attachment; the seller's VAT number fails its checksum
+  6  invalid TRN       no attachment; the seller's VAT number fails the format check
 
 CAVEAT, inherited from tests/fixtures.py: the UBL is ZATCA-*shaped* and built with
 the same library that reads it back. It proves this codebase is self-consistent,
@@ -59,9 +59,10 @@ LATIN_FONT = FONT_DIR / "arial.ttf"
 CENT = Decimal("0.01")
 VAT_RATE = Decimal("0.15")
 
-# Well-formed TRNs: 15 digits, leading 3, trailing 3, and '1' in the 11th place.
+# Well-formed TRNs: 15 digits, leading 3, trailing 3. (There is no published
+# checksum to satisfy beyond that — see app/services/ubl.py, validate_trn.)
 BUYER_TRN = "311111111110003"
-INVALID_TRN = "300987654300003"  # the 11th digit is 0, so it fails
+INVALID_TRN = "300987654300004"  # ends in 4, not 3 — fails the format check
 
 
 # --------------------------------------------------------------------------- #

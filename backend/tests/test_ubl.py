@@ -32,6 +32,7 @@ from app.services.ubl import (
     decode_zatca_qr,
     extract_embedded_xml,
     parse_ubl_invoice,
+    trn_tax_type,
     validate_trn,
 )
 from tests import fixtures
@@ -236,10 +237,31 @@ def test_truncated_tlv_raises() -> None:
 
 # --------------------------------------------------------------------------- #
 # 4. validate_trn
+#
+# The rule used to reject a TRN whose 11th digit was not '1' — a constraint
+# invented for this project, not a ZATCA one. A Saudi TRN's 11th digit is the
+# first of three BRANCH digits (000 = head office), so that rule rejected
+# every head-office registration, which is most of them. Restored to a real
+# example on a real invoice: it was blocked by the old rule and should not be.
+#
+# What IS public and stable: 15 digits, a leading 3 (Saudi Arabia's country
+# digit), a trailing 3. The check digit's algorithm (position 10) is not
+# published anywhere, so there is nothing to verify there — "TRN_CHECKSUM" was
+# always the wrong name for a check this code never actually made.
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "trn",
-    ["310122393510003", "311111111110003", " 310122393510003 ", "310-1223935-10003"],
+    [
+        "310122393500003",  # the official ZATCA documentation sample
+        "399999999900003",  # head office (branch digits 000), synthetic, real-invoice shape
+        "388888888800003",  # head office (branch digits 000), synthetic, real-invoice shape
+        "311111111110003",
+        " 310122393500003 ",
+        "310-1223935-00003",
+        "310122393520003",  # a non-head-office branch digit — the OLD rule
+        # rejected this shape too (checked position 10, not just 10 == '1');
+        # nothing published says a branch digit other than 0 is invalid.
+    ],
 )
 def test_valid_trns(trn: str) -> None:
     assert validate_trn(trn) is True
@@ -248,19 +270,31 @@ def test_valid_trns(trn: str) -> None:
 @pytest.mark.parametrize(
     ("trn", "why"),
     [
-        ("31012239351000", "14 digits, too short"),
-        ("3101223935100034", "16 digits, too long"),
-        ("410122393510003", "does not start with 3"),
-        ("310122393510004", "does not end with 3"),
-        ("310122393500003", "11th digit is 0, not 1"),
-        ("310122393520003", "11th digit is 2, not 1"),
-        ("31012239351000X", "contains a non-digit"),
+        ("31012239350000", "14 digits, too short"),
+        ("3101223935000034", "16 digits, too long"),
+        ("410122393500003", "does not start with 3"),
+        ("310122393500004", "does not end with 3"),
+        ("31012239350000X", "contains a non-digit"),
         ("", "empty"),
         ("               ", "whitespace only"),
     ],
 )
 def test_invalid_trns(trn: str, why: str) -> None:
     assert validate_trn(trn) is False, why
+
+
+# --------------------------------------------------------------------------- #
+# 4b. trn_tax_type — informational only, never a validity verdict
+# --------------------------------------------------------------------------- #
+def test_tax_type_is_the_last_two_digits() -> None:
+    assert trn_tax_type("399999999900003") == "03"
+    assert trn_tax_type("310122393520003") == "03"
+
+
+def test_tax_type_is_none_for_a_malformed_trn() -> None:
+    """Nothing to report on a TRN that is not even shaped like one."""
+    assert trn_tax_type("not a trn") is None
+    assert trn_tax_type("") is None
 
 
 # --------------------------------------------------------------------------- #

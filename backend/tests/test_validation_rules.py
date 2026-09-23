@@ -46,12 +46,13 @@ from app.services.validation.rules.zatca import (
     qr_totals_match_extracted,
     simplified_invoice_below_threshold,
     standard_invoice_has_sequence_fields,
+    trn_tax_type_is_vat,
     trns_are_structurally_valid,
     vat_category_is_known,
     vat_rate_matches_category,
 )
 
-VALID_TRN = "310122393510003"
+VALID_TRN = "310122393500003"  # the official ZATCA documentation sample
 OTHER_TRN = "311111111110003"
 
 
@@ -256,10 +257,21 @@ def test_negative_amount_not_applicable_without_amounts() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# TRN_CHECKSUM
+# TRN_FORMAT (renamed from TRN_CHECKSUM: the check digit's algorithm is not
+# published, so nothing here ever verified a checksum — the old name claimed a
+# check this code cannot do)
 # --------------------------------------------------------------------------- #
 def test_valid_trns_pass() -> None:
     context = ctx(fields={"seller_trn": VALID_TRN, "buyer_trn": OTHER_TRN})
+    assert trns_are_structurally_valid(context) == []
+
+
+def test_a_head_office_trn_passes() -> None:
+    """The bug this rule replaces: it used to require the 11th digit — the
+    first of three BRANCH digits — to be '1'. It is '0' for every head office,
+    which is most Saudi companies, including the two on a real invoice that
+    was wrongly blocked by the old rule."""
+    context = ctx(fields={"seller_trn": "399999999900003", "buyer_trn": "388888888800003"})
     assert trns_are_structurally_valid(context) == []
 
 
@@ -269,6 +281,7 @@ def test_invalid_seller_trn_is_an_error() -> None:
     assert findings[0].field_key == "seller_trn"
     assert findings[0].severity is Severity.ERROR
     assert "15" in findings[0].message_en
+    assert "11th" not in findings[0].message_en, "the old, wrong constraint must not be quoted"
 
 
 def test_both_trns_can_fail_independently() -> None:
@@ -286,6 +299,33 @@ def test_absent_buyer_trn_is_not_a_failure() -> None:
 
 def test_trn_rule_not_applicable_when_no_trn_present() -> None:
     assert trns_are_structurally_valid(ctx(fields={})) is None
+
+
+# --------------------------------------------------------------------------- #
+# TRN_TAX_TYPE_UNEXPECTED — informational, never blocks
+# --------------------------------------------------------------------------- #
+def test_a_vat_tax_type_passes_quietly() -> None:
+    context = ctx(fields={"seller_trn": VALID_TRN})
+    assert trn_tax_type_is_vat(context) == []
+
+
+def test_a_non_vat_tax_type_is_a_warning_not_an_error() -> None:
+    # 15 digits, starts and ends with 3 (TRN_FORMAT-valid); tax type "13", not "03".
+    context = ctx(fields={"seller_trn": "310122393500013"})
+    findings = trn_tax_type_is_vat(context)
+    assert findings is not None and len(findings) == 1
+    assert findings[0].severity is Severity.WARNING
+    assert findings[0].field_key == "seller_trn"
+
+
+def test_a_malformed_trn_is_left_to_the_format_rule() -> None:
+    """Not applicable, not passing: nothing to say about the tax type of a TRN
+    that is not even shaped like one — TRN_FORMAT already reports that."""
+    assert trn_tax_type_is_vat(ctx(fields={"seller_trn": "123"})) is None
+
+
+def test_tax_type_rule_not_applicable_when_no_trn_present() -> None:
+    assert trn_tax_type_is_vat(ctx(fields={})) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -709,7 +749,7 @@ def test_broken_invoice_reports_blockers_and_blocks_confirmation() -> None:
     report = run_rules(context)
 
     assert "GRAND_TOTAL_MISMATCH" in report.blockers
-    assert "TRN_CHECKSUM" in report.blockers
+    assert "TRN_FORMAT" in report.blockers
     assert report.is_confirmable is False
     assert "total_amount" in report.blocking_field_keys
     assert "seller_trn" in report.blocking_field_keys
@@ -733,7 +773,7 @@ def test_not_applicable_rules_record_nothing() -> None:
     """An empty context should not manufacture passing rows for absent checks."""
     report = run_rules(ctx())
     assert "QR_TOTAL_MATCH" not in {r.code for r in report.results}
-    assert "TRN_CHECKSUM" not in {r.code for r in report.results}
+    assert "TRN_FORMAT" not in {r.code for r in report.results}
 
 
 def test_blockers_are_deduplicated_in_order() -> None:
@@ -744,7 +784,7 @@ def test_blockers_are_deduplicated_in_order() -> None:
         }
     )
     report = run_rules(context)
-    assert report.blockers.count("TRN_CHECKSUM") == 1
+    assert report.blockers.count("TRN_FORMAT") == 1
 
 
 def test_value_that_normalizes_to_nothing_is_skipped() -> None:
@@ -771,7 +811,7 @@ def test_duplicate_rule_code_is_rejected_at_import_time() -> None:
 
     with pytest.raises(ValueError, match="duplicate rule code"):
 
-        @rule_decorator("TRN_CHECKSUM", Severity.ERROR, message_ar="مكرر", message_en="duplicate")
+        @rule_decorator("TRN_FORMAT", Severity.ERROR, message_ar="مكرر", message_en="duplicate")
         def _clash(_ctx: ValidationContext) -> list[RuleResult] | None:  # pragma: no cover
             return None
 
