@@ -98,7 +98,7 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **447 passed, 1 skipped, 1 xfailed — 23m00s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-23. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **466 passed, 1 skipped, 1 xfailed — 21m33s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-24. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **17** (10 blocking errors, 7 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-23 |
 | Validation coverage | **100% statements and branches** — 473 statements, 156 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 98 tests, **1.5 s** without coverage instrumentation (the rules are pure functions) |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
@@ -115,6 +115,59 @@ purchase-order number is not on that invoice at all; and the two line
 quantities ("2", "4") are too short to locate safely — a box on the wrong "2"
 is worse than no box. Each gets no bounding box rather than a wrong one, and
 keeps its authority either way: the XML is what was signed, not the page.
+
+## Results
+
+One real invoice, scored against hand-entered ground truth: a two-page Arabic
+B2B tax invoice from a Saudi contractor, no embedded XML, a clean text layer on
+page 1 and a blank filler page 2. The invoice and its ground truth are
+git-ignored personal data; only the scores are here.
+
+Measured 2026-09-24 with `scripts/eval_set.py score`, nine header fields, the
+full schema-conditioned prompt with field guidelines. Temperature 0, seed 0 and
+`think: false` on every call. The vision run was repeated three times and
+scored identically each time; that is repeatable here, not guaranteed, since
+Ollama's prompt cache has been seen to change a value between a cold and a warm
+run (recorded in `CLAUDE.md`).
+
+| Field | Text path<br/>`qwen2.5:7b-instruct` | Vision path<br/>`qwen3.5:4b`, every page as an image | Auto (the default)<br/>page 1 as text, page 2 as an image |
+| --- | :---: | :---: | :---: |
+| Invoice number | ✓ | ✓ | ✓ |
+| Issue date | ✓ | ✓ | ✓ |
+| Seller name | ✓ | ✗ | ✓ |
+| Seller VAT number | ✓ | ✗ swapped with the buyer's | ✓ |
+| Buyer name | ✓ | ✗ | ✓ |
+| Buyer VAT number | ✓ | ✗ swapped with the seller's | ✓ |
+| Subtotal | ✗ returned null | ✓ | ✗ |
+| VAT amount | ✓ | ✓ | ✓ |
+| Total | ✓ | ✓ | ✗ |
+| **Correct** | **8 / 9** | **5 / 9** | **7 / 9** |
+
+What this does and does not show:
+
+* **n = 1.** One invoice is an anecdote, not an accuracy figure. It is here
+  because it is real, not because it generalises.
+* **On a clean text layer, the text path wins.** That is the case it is built
+  for. Vision exists for pages with no usable text, and this invoice has none
+  of those that carry data, so it cannot show vision earning its place.
+* **Vision got the whole totals block right and the parties wrong.** Both names
+  missed, well away from the ground truth (under 50% similarity), not a dropped
+  word; the two VAT numbers came back swapped with each other, checked directly
+  rather than inferred from the scores. The invoice prints two similar
+  registration blocks, and nothing in the prompt anchors which one is the
+  seller's letterhead.
+* **Auto cost a field here, because of the blank page.** Page 2 has no text, so
+  routing sends it as an image, which moves the *whole* call to the vision
+  model. A page with nothing on it should not need vision; see
+  [Known limitations](#known-limitations).
+
+**How the vision model was chosen.** By hand, before the pipeline was wired,
+with the same bare prompt and no field list on this same invoice:
+`qwen2.5vl:3b` scored 7/9; `qwen3.5:4b` at Ollama's own defaults scored 3/9 and
+invented computed values; `qwen3.5:4b` with temperature 0, a fixed seed and
+thinking off scored 8/9. Ollama defaults that model to temperature 1, and its
+OpenAI-compatible endpoint silently ignores `think`, which is why the client
+now calls Ollama's native API and pins all three on every request.
 
 ## The dashboard
 
@@ -318,6 +371,50 @@ find the document it was scheduled for. No test went through that path; driving 
 real upload through the UI did, and the regression test was watched failing
 before the fix.
 
+## Known limitations
+
+What is built, and where it is weak. Numbers are measured on this machine.
+
+* **A small local model.** Extraction runs on a 4 GB GPU: `qwen2.5:7b-instruct`
+  (Q4_K_M, 4.7 GB on disk) for text and `qwen3.5:4b` (Q4_K_M, 3.4 GB) for
+  vision, in a 4,096-token context. One model call on the demo invoice took
+  **164.9 s**. The only real-invoice accuracy figures are the n = 1
+  [Results](#results) above. Step Zero sidesteps the model entirely for
+  compliant invoices, which is the design's answer to this, but a supplier
+  without embedded XML gets a small model's reading.
+* **Arabic PDF text layers are fragile.** A text layer is whatever the
+  producer wrote, and producers disagree. On real and generated invoices this
+  project has met Arabic words stored in reverse order, MuPDF's own tokenizer
+  merging three words into one and splitting others mid-word, and a separator
+  dropped across a 300 pt gap between table cells. Each is fixed or worked
+  around (reading order is rebuilt from glyph positions, words are segmented
+  from raw glyph gaps), and a page that still looks cut apart raises
+  `TEXT_LAYER_FRAGMENTED` and is routed to vision. Still open: Arabic dates
+  in right-to-left runs are split into separate words and get no bounding box,
+  and image-only Arabic scans cannot be read at all, because the OCR engine
+  that loads on this machine has no Arabic.
+* **No document classification, so a multi-document PDF is read as one.** The
+  first real invoice tested was one file holding two documents, a marketplace
+  purchase summary and a tax invoice with a different total. Every page is read
+  with the one tax-invoice schema in one prompt, so which total comes back
+  depends on which page the model weighs more. It picked the right one; nothing
+  guarantees that, and the reviewer is not told a second document was there.
+* **A missing required field can look settled.** No rule blocks on a null
+  required field by itself. A null is flagged only when the field's label or a
+  synonym is found printed on the page. On the invoice in Results, the text path
+  returned a null subtotal and marked it validated, because that invoice labels
+  its subtotal with a generic word ("المجموع", "sum") that is not the field's
+  label. The document stayed blocked only because its blank second page
+  happened to trigger the degraded-page rule. On a clean one-page invoice it
+  would have looked finished.
+* **A blank page forces the vision model.** Routing treats a page with no text
+  as needing vision, and one such page moves the whole call to the vision
+  model. In Results that cost a field against the text path.
+* **Line items come from signed XML only.** The model is not asked for them.
+* **No webhooks, no ERP connectors.** Output is a file the reviewer downloads:
+  JSON, XLSX or CSV. Nothing pushes a confirmed invoice to an accounting system
+  or notifies one.
+
 ## Layout
 
 ```
@@ -325,7 +422,8 @@ backend/     FastAPI, SQLAlchemy 2.0 async, Alembic, the pipeline and rules
 frontend/    Next.js 16 App Router, TypeScript strict, Tailwind, BFF routes
 docs/        db.md · ingestion.md · validation.md · demo.md · adr/ · screenshots/
              design-handoff/ (the original dashboard design) · legacy/
-samples/     real invoices, git-ignored — never committed; test/ is generated
+samples/     real invoices, git-ignored — never committed; test/ is generated;
+             eval/ holds hand-entered ground truth, also git-ignored
 legacy/      the pre-Munsiq prototype: pandas → Excel reporter, fine-tune notebook
              (not maintained; see legacy/README.md)
 ```
