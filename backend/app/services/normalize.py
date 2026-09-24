@@ -62,6 +62,23 @@ _PUNCT_MAP: Final[dict[int, str]] = {
     **{ord(ch): " " for ch in _SPACES},
 }
 
+# Letter variants that are routinely interchanged in everyday Arabic writing —
+# and, more to the point here, extracted two different but equally correct
+# ways by two different reading paths (a keyboard layout, a font's default
+# glyph, a model's own transcription habit) — but are NOT actually the same
+# letter. Folding them is a MATCHING heuristic only: it belongs in
+# normalize_for_match, never in normalize_text, because a value that gets
+# stored or shown to a reviewer must keep the letters exactly as printed.
+_ORTHOGRAPHIC_MAP: Final[dict[int, str]] = {
+    # Alef family: bare alef, and alef with hamza above/below/madda.
+    **{ord(ch): "ا" for ch in "اأإآ"},
+    # Alef maksura vs yeh — indistinguishable at a word's end in casual script.
+    **{ord(ch): "ي" for ch in "يى"},
+    # Ta marbuta vs ha — a common spelling slip, and how some fonts render one
+    # as the other at a word's end.
+    **{ord(ch): "ه" for ch in "هة"},
+}
+
 ARABIC_RANGE: Final[tuple[int, int]] = (0x0600, 0x06FF)
 ARABIC_PRESENTATION_RANGES: Final[tuple[tuple[int, int], ...]] = (
     (0xFB50, 0xFDFF),  # Presentation Forms-A
@@ -111,6 +128,19 @@ def normalize_text(text: str, *, fold_diacritics: bool = True) -> str:
     return _WHITESPACE.sub(" ", out).strip()
 
 
+def fold_arabic_orthography(text: str) -> str:
+    """Fold letter variants that are visually or phonetically interchangeable
+    in everyday Arabic writing onto one representative: the alef family
+    (أ إ آ ا), alef maksura vs yeh (ى ي), and ta marbuta vs ha (ة ه).
+
+    For matching only — see the module-level ``_ORTHOGRAPHIC_MAP`` comment.
+    "سلمي الانصاري" and "سلمى الأنصاري" are the same name read two different but
+    equally correct ways; without this, grounding rejects the correct value
+    and a benchmark scores it wrong.
+    """
+    return text.translate(_ORTHOGRAPHIC_MAP)
+
+
 def normalize_for_match(text: str) -> str:
     """Aggressive form for fuzzy matching only. Never stored."""
-    return normalize_text(text).casefold()
+    return fold_arabic_orthography(normalize_text(text)).casefold()

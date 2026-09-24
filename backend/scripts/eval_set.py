@@ -68,7 +68,7 @@ def _template(document_id: str) -> dict[str, object]:
 
 
 async def _load(org_id: uuid.UUID, eval_set_name: str, directory: Path) -> None:
-    async with session_scope(org_id) as session, session.begin():
+    async with session_scope(org_id) as session:
         eval_set_id = await session.scalar(
             sql("SELECT id FROM eval_sets WHERE org_id = :o AND name = :n"),
             {"o": org_id, "n": eval_set_name},
@@ -127,7 +127,7 @@ async def _score(org_id: uuid.UUID, eval_set_name: str, mode: ExtractionMode) ->
         )
     storage = storage_mod.get_storage()
 
-    async with session_scope(org_id) as session, session.begin():
+    async with session_scope(org_id) as session:
         eval_set_id = await session.scalar(
             sql("SELECT id FROM eval_sets WHERE org_id = :o AND name = :n"),
             {"o": org_id, "n": eval_set_name},

@@ -51,10 +51,13 @@ class Settings(BaseSettings):
     # accident in anything network-reachable.
     DEBUG_ENDPOINTS: bool = False
 
-    # OpenAI-compatible inference endpoint. Ollama locally; the client is written
-    # against the OpenAI wire format so the endpoint can be swapped without code
-    # changes. Never hardcode a model URL anywhere else — see CLAUDE.md.
-    INFERENCE_BASE_URL: str = "http://localhost:11434/v1"
+    # Ollama's own origin — NO trailing /v1. The client calls its native
+    # /api/chat, not the OpenAI-compatible endpoint: verified against Ollama
+    # 0.34.1, the OpenAI-compatible endpoint silently ignores `think`, and a
+    # hybrid-reasoning model (qwen3.5) then never stops thinking regardless of
+    # what is sent — see extraction/client.py's module docstring. Never
+    # hardcode a model URL anywhere else — see CLAUDE.md.
+    INFERENCE_BASE_URL: str = "http://localhost:11434"
 
     # A general instruct model, NOT the munsiq-extractor fine-tune. That model
     # has a fixed 5-column schema baked into its weights, which is precisely the
@@ -69,11 +72,18 @@ class Settings(BaseSettings):
     # later cannot make runs unrepeatable without anyone noticing.
     INFERENCE_SEED: int = 0
 
-    # The context window the model server is ACTUALLY running with. This client
-    # cannot set it: Ollama's OpenAI-compatible endpoint ignores num_ctx (verified
-    # against Ollama 0.34.1). On this 4 GB GPU Ollama picks 4096 by itself; change
-    # it with a Modelfile or OLLAMA_CONTEXT_LENGTH, then change this to match. It
-    # exists so the client can refuse a reply whose prompt filled the window.
+    # The context window requested on every call, via native /api/chat's
+    # options.num_ctx — which Ollama actually honours (checked directly: a
+    # small num_ctx measurably truncates prompt_eval_count). This was NOT true
+    # of the OpenAI-compatible endpoint this client used before 2026-09-24,
+    # which silently ignored num_ctx altogether (verified against Ollama
+    # 0.34.1) — the same silent-ignore shape `think` turned out to have there
+    # too, which is why the client no longer uses that endpoint at all. Still
+    # matched to what this 4 GB GPU can actually hold: raising it without more
+    # VRAM does not add context, it OOMs. The post-hoc guard below stays as a
+    # correctness backstop, not the primary mechanism — a chat template's own
+    # overhead could still in principle push a request over the requested
+    # window.
     INFERENCE_NUM_CTX: int = 4096
     INFERENCE_MAX_RETRIES: int = 2
 
@@ -87,22 +97,33 @@ class Settings(BaseSettings):
     EXTRACTION_MODE: Literal["text", "vision", "auto"] = "auto"
 
     # Deliberately a SEPARATE model, base URL and context size from the text
-    # settings above, not a flag on the same client: the vision model on this
-    # 4GB card is qwen2.5vl:3b, small enough to run locally; a heavier VL model
+    # settings above, not a flag on the same client: a heavier VL model
     # (qwen2.5vl:7b, say) belongs on a machine with more VRAM — a Colab
     # notebook tunnelled through ngrok, for instance — which is exactly what
     # VISION_INFERENCE_BASE_URL is for. Falls back to INFERENCE_BASE_URL when
     # unset, so a local-only setup needs to configure nothing extra.
-    VISION_MODEL: str = "qwen2.5vl:3b"
+    #
+    # qwen2.5vl:3b (the vision-only VL model tried first) scored 7/9 on the one
+    # real invoice tested by hand, both errors confined to the totals block.
+    # qwen3.5:4b — Apache 2.0, checked via `ollama show qwen3.5:4b` before
+    # adopting it — is a hybrid-reasoning model with BOTH vision and completion
+    # capability (`ollama show` lists ["completion","vision","tools",
+    # "thinking"]), and beat it on the same invoice, same bare prompt: 8/9,
+    # only one dropped word in a name — but only once temperature, seed and
+    # think were all sent explicitly (see extraction/client.py). At Ollama's
+    # own defaults for it (temperature 1, thinking on) it scored 3/9 with
+    # invented computed values, on the SAME prompt. Also fits the same 4 GB
+    # card.
+    VISION_MODEL: str = "qwen3.5:4b"
     VISION_INFERENCE_BASE_URL: str | None = None
     VISION_NUM_CTX: int = 4096
-    """Same reasoning as INFERENCE_NUM_CTX: the client cannot set this over the
-    wire (Ollama's /v1 ignores num_ctx), so it exists to catch an overflow
-    after the fact. An image costs real context — measured on this box, a
-    single page at VISION_RASTER_DPI=100 is ~1,300 prompt tokens before the
-    field guidelines are even added — so this is checked separately from the
-    text path's budget, and independently configurable for a remote model
-    that may be given a larger window."""
+    """Requested via options.num_ctx on every call — see INFERENCE_NUM_CTX's
+    own comment for why that is now authoritative rather than hoped-for. An
+    image costs real context — measured on this box, a single page at
+    VISION_RASTER_DPI=100 is ~1,300 prompt tokens before the field guidelines
+    are even added — so this is checked separately from the text path's
+    budget, and independently configurable for a remote model that may be
+    given a larger window."""
 
     # Lower than RASTER_DPI (150, for the review UI's own page image): a vision
     # model's prompt cost scales with pixel count, not just file size — the
@@ -113,11 +134,11 @@ class Settings(BaseSettings):
     VISION_RASTER_DPI: int = 100
 
     # However many pages classify as needing vision, at most this many are
-    # actually attached as images to one call — each one costs real context,
-    # and Ollama's /v1 truncates silently past it. The inference client already
-    # fails loudly rather than silently truncating (see extraction/client.py);
-    # this cap exists so a five-page unreadable scan fails predictably instead
-    # of via a token-budget accident.
+    # actually attached as images to one call — each one costs real context
+    # against VISION_NUM_CTX, and the inference client fails loudly rather
+    # than silently truncating (see extraction/client.py); this cap exists so
+    # a five-page unreadable scan fails predictably instead of via a
+    # token-budget accident.
     MAX_VISION_PAGES: int = 2
 
     MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024

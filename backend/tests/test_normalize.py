@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.normalize import (
+    fold_arabic_orthography,
     has_arabic,
     has_arabic_presentation_forms,
     normalize_for_match,
@@ -100,3 +101,52 @@ def test_typographic_dashes_fold_to_ascii() -> None:
 
 def test_non_breaking_space_folds_to_a_normal_space() -> None:
     assert normalize_text("45,320.00\u00a0SAR") == "45,320.00 SAR"
+
+
+# --------------------------------------------------------------------------- #
+# Arabic orthographic folding — matching only, never storage
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("letter", ["أ", "إ", "آ", "ا"])
+def test_the_alef_family_folds_to_one_letter(letter: str) -> None:
+    assert fold_arabic_orthography(letter) == fold_arabic_orthography("ا")
+
+
+@pytest.mark.parametrize("letter", ["ى", "ي"])
+def test_alef_maksura_and_yeh_fold_to_one_letter(letter: str) -> None:
+    assert fold_arabic_orthography(letter) == fold_arabic_orthography("ي")
+
+
+@pytest.mark.parametrize("letter", ["ة", "ه"])
+def test_ta_marbuta_and_ha_fold_to_one_letter(letter: str) -> None:
+    assert fold_arabic_orthography(letter) == fold_arabic_orthography("ه")
+
+
+def test_two_spellings_of_one_name_match() -> None:
+    """The shape of the case that motivated this (a real supplier name, here
+    replaced with a synthetic one using the same two variant letters): one name
+    read two different but equally correct ways must ground and score as the
+    same value, not as a mismatch."""
+    left = normalize_for_match("سلمي الانصاري")
+    right = normalize_for_match("سلمى الأنصاري")
+    assert left == right
+
+
+def test_orthographic_folding_does_not_touch_stored_or_displayed_text() -> None:
+    """Two spellings of a name are different names, not a typo of each other.
+
+    Folding them is a matching heuristic; applying it to a value that gets
+    stored or shown to a reviewer would silently corrupt data the model got
+    exactly right.
+    """
+    assert normalize_text("أحمد") == "أحمد"
+    assert normalize_text("فاطمة") == "فاطمة"
+    assert normalize_text("سلمى") == "سلمى"
+
+
+def test_folding_is_idempotent() -> None:
+    once = fold_arabic_orthography("سلمى الأنصاري")
+    assert fold_arabic_orthography(once) == once
+
+
+def test_latin_text_is_unaffected_by_folding() -> None:
+    assert fold_arabic_orthography("Jubail Maintenance") == "Jubail Maintenance"

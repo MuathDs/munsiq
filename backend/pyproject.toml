@@ -23,7 +23,7 @@ dependencies = [
     "asyncpg>=0.29",            # async Postgres driver
     "alembic>=1.13",
     "greenlet",                 # required by SQLAlchemy's async bridge
-    "httpx>=0.27",              # OpenAI-compatible inference calls
+    "httpx>=0.27",              # Ollama native-API inference calls
     "pymupdf>=1.24",            # PDF text layer (words + boxes) and rasterization
     "pillow>=10",               # WebP encoding, OCR image handling
     "rapidfuzz>=3",             # grounding: match extracted values to OCR words
@@ -73,7 +73,7 @@ select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF"]
 # RUF001 flags Arabic-Indic digits as "ambiguous" characters. In this codebase
 # they are the subject under test and the data we exist to process, not a typo.
 "tests/*" = ["RUF001"]
-"app/services/normalize.py" = ["RUF001", "RUF003"]
+"app/services/normalize.py" = ["RUF001", "RUF002", "RUF003"]
 "app/services/pipeline.py" = ["RUF001"]
 "app/services/validation/*.py" = ["RUF001", "RUF002", "RUF003"]
 "app/services/validation/rules/*.py" = ["RUF001", "RUF002", "RUF003"]

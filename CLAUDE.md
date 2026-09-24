@@ -5,7 +5,8 @@ Document Information Extraction SaaS for Arabic/English invoices, Saudi B2B (ZAT
 ## Stack
 - Backend: Python 3.12, FastAPI, SQLAlchemy 2.0 (async), Pydantic v2, Alembic, PostgreSQL 16
 - Frontend: Next.js 16 (App Router), TypeScript strict, Tailwind, TanStack Query
-- Inference: Ollama, reached over its OpenAI-compatible API. Runs natively on Windows.
+- Inference: Ollama, reached over its native API (`/api/chat` — not the
+  OpenAI-compatible endpoint; see "Known issues"). Runs natively on Windows.
 - Queue: Redis + arq. Storage: S3-compatible (MinIO locally).
 
 ## Platform
@@ -269,6 +270,37 @@ FIXED, and worth remembering why:
   `tests/test_confirm_endpoint.py::test_the_same_rule_firing_twice_gives_
   each_blocker_its_own_id`, `tests/test_workspace_api.py::test_two_findings_
   of_the_same_rule_have_distinct_ids`.
+- **The OpenAI-compatible endpoint silently ignored `think`, and Ollama's
+  hybrid-reasoning model defaults to temperature 1** (fixed 2026-09-24).
+  Manual, same-bare-prompt tests on the contractor invoice: `qwen2.5vl:3b` scored
+  7/9; `qwen3.5:4b` at ITS Ollama defaults scored 3/9, inventing computed
+  values (a VAT of `527.8549999`, a wrong TRN digit) — because Ollama defaults
+  `qwen3.5` to temperature 1, checked directly via `/api/show`
+  (`temperature: 1, presence_penalty: 1.5, top_k: 20, top_p: 0.95`), and
+  because the client sent no `think` control at all. The SAME model, SAME
+  prompt, with temperature 0, a fixed seed and `think: false` sent explicitly,
+  scored 8/9 — only one dropped word in a name. Sending `think: false` to
+  `/v1/chat/completions` changes nothing: checked directly, byte-identical
+  `reasoning` output and completion-token count with the field present or
+  absent, and `chat_template_kwargs: {"enable_thinking": false}` (vLLM's own
+  spelling of the same control) is silently accepted and ignored too. Ollama's
+  NATIVE `/api/chat` honours `think` correctly (checked directly: no
+  `reasoning` field at all, a fraction of the completion tokens) — so
+  `extraction/client.py` no longer speaks the OpenAI wire format at all,
+  ending the deliberate choice recorded in ADR 002. Found in the process: the
+  native endpoint also honours `options.num_ctx`, which the OpenAI-compatible
+  one never did either (checked directly: a small `num_ctx` measurably
+  truncates `prompt_eval_count`) — so `INFERENCE_NUM_CTX`/`VISION_NUM_CTX` are
+  now sent as a real request, not just a value hoped to match the server's own
+  configuration, and the post-hoc overflow guard in `client.py` is a backstop
+  rather than the only line of defense. Every call now sends temperature,
+  seed, `think` and `num_ctx` explicitly, never relying on a server default —
+  `tests/test_inference_client.py` asserts all four are present and correct on
+  every call, images or not, json_mode or not. `qwen3.5:4b` is licensed Apache
+  2.0 (checked via `ollama show qwen3.5:4b` before adopting it) and is now
+  `VISION_MODEL`'s default, replacing `qwen2.5vl:3b` — it also has vision
+  capability itself (`ollama show` lists `vision` alongside `thinking`),
+  which is how the same bare-prompt comparison was possible on one model.
 - **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
   `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
   and a fixed seed changed nothing (greedy decoding). Consecutive documents share
@@ -318,6 +350,28 @@ FIXED, and worth remembering why:
   Whether the schema-conditioned guidelines help or hurt the totals confusion
   the user's manual test already found is exactly the open question — this run
   does not answer it, because there is nothing to score either path against yet.
+- **Ground truth now exists for the contractor invoice, and the schema-conditioned
+  vision path scores 5/9 against it** (2026-09-24, `scripts/eval_set.py`,
+  eval set `contractor-invoice`, `--mode vision`, `VISION_MODEL=qwen3.5:4b`,
+  temperature/seed/think all explicit — see the fix above). The ENTIRE totals
+  block is correct (subtotal, VAT, total all match), plus `invoice_number` and
+  `issue_date` — this is the totals-block confusion from the user's bare-prompt
+  manual test NOT reproducing here, which is itself informative: schema
+  guidelines may be exactly what fixed it. Both wrong: `seller_name` and
+  `buyer_name` (not fuzzy-close misses — checked directly with rapidfuzz
+  against the ground truth, both under 50% similarity, so not a
+  dropped-word case like the manual bare-prompt test's buyer name). And
+  `seller_trn`/`buyer_trn` came back SWAPPED with each other — checked
+  directly (`seller_trn`'s answer matched `buyer_trn`'s ground truth and vice
+  versa) rather than assumed from the 0% scores alone. A swapped
+  seller/buyer pair on a document with two similarly-formatted registration
+  blocks is exactly the kind of error the deferred **document classification**
+  entry above would not fix (it is not a wrong-schema problem) — this looks
+  more like the prompt or guidelines not anchoring which registration block is
+  the seller's own letterhead versus the "invoice to" block. Worth a targeted
+  guideline tightening, not built here — this is one document, deterministic
+  and reproduced identically on a second run, but one document is one
+  document, not a pattern.
 
 ## Hard rules
 - Multi-tenant. EVERY table has org_id. Postgres RLS enforces isolation.

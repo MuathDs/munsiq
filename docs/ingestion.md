@@ -221,9 +221,15 @@ actually needed it, which is what gets recorded on each `pages` row
 
 The vision model is deliberately a SEPARATE model, base URL and context budget
 from the text settings (`VISION_MODEL`, `VISION_INFERENCE_BASE_URL`,
-`VISION_NUM_CTX`) — `qwen2.5vl:3b` locally, small enough for 4 GB; a heavier VL
-model belongs on a machine with more VRAM, reached through
-`VISION_INFERENCE_BASE_URL` (a Colab notebook tunnelled through ngrok, say).
+`VISION_NUM_CTX`) — `qwen3.5:4b` locally (Apache 2.0), small enough for 4 GB
+and, measured by hand against `qwen2.5vl:3b` on the same real invoice, more
+accurate; a heavier VL model belongs on a machine with more VRAM, reached
+through `VISION_INFERENCE_BASE_URL` (a Colab notebook tunnelled through ngrok,
+say). `qwen3.5` is a hybrid-reasoning model, which is exactly why
+`extraction/client.py` sends `temperature`, `seed` and `think` explicitly on
+every call, text and vision both, instead of trusting Ollama's own defaults —
+see "Known issues" in CLAUDE.md for the measured difference relying on the
+defaults made.
 Falls back to the text endpoint when unset. Pages routed to vision are
 rasterized separately from the review UI's own page image, at `VISION_RASTER_DPI`
 (100, lower than `RASTER_DPI`'s 150) — a vision model's prompt cost scales with

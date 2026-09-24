@@ -38,7 +38,7 @@ flowchart TD
     A["Upload · presigned URL<br/>PDF posted straight to the API"] --> B["Hash first: a resend returns the existing document<br/>Object storage + document row, committed"]
     B --> C{"Embedded UBL XML?"}
     C -->|"yes — Step Zero"| D["Parse signed UBL<br/>header + line items<br/>source=ubl_xml · confidence 1.0<br/><b>model never called</b>"]
-    C -->|"no"| E["Schema-conditioned extraction<br/>field list read from the database<br/>Ollama · OpenAI-compatible API"]
+    C -->|"no"| E["Schema-conditioned extraction<br/>field list read from the database<br/>Ollama · native API"]
     B --> F["Rasterize → one WebP per page"]
     F --> G["Text layer per page<br/>OCR only where there is none<br/>degraded pages recorded, not hidden"]
     G --> D
@@ -238,7 +238,11 @@ Inference (only needed for documents without embedded XML):
 
 ```bash
 ollama pull qwen2.5:7b-instruct
+ollama pull qwen3.5:4b
 ```
+
+The second is only reached for a page whose text layer is missing or looks
+cut apart (`EXTRACTION_MODE=auto`, the default — see `docs/ingestion.md`).
 
 The frontend reaches the API through a BFF that holds the tenant identity
 server-side, so both halves need the shared secret. In `backend/.env` set

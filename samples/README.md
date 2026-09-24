@@ -64,3 +64,12 @@ wrote; `tests/test_make_test_invoices.py` pins those expectations.
 
 The UBL in them is ZATCA-shaped and built with the library that reads it back, so
 it shows this code is self-consistent — not that it reads certified output.
+
+## `samples/eval/` — hand-entered ground truth for real invoices
+
+Git-ignored: the JSON files ARE the invoice's fields (nine of them — see
+`backend/scripts/eval_set.py`'s module docstring), same reasoning as the PDFs
+above. `eval_set.py template <document_id>` prints the shape; `eval_set.py
+load` reads every `*.json` here into the `eval_sets` / `ground_truth_fields`
+tables (already in the Phase 2 schema); `eval_set.py score` runs extraction
+and reports COUNTS ONLY, never a field's expected or extracted value.

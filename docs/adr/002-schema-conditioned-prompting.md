@@ -24,9 +24,13 @@ model is a general instruct model.
   `guideline` saying what counts and what does not.
 * `build_user_prompt` renders that list into the prompt on every call. Nothing
   in the codebase hardcodes a field key.
-* Inference goes to an OpenAI-compatible endpoint (`INFERENCE_BASE_URL`,
-  Ollama locally) running a general model — `qwen2.5:7b-instruct` by default,
-  explicitly **not** the old fine-tune.
+* Inference goes to Ollama's native API (`INFERENCE_BASE_URL`, Ollama locally)
+  running a general model — `qwen2.5:7b-instruct` by default, explicitly
+  **not** the old fine-tune. Native, not the OpenAI-compatible endpoint this
+  used before 2026-09-24: that endpoint silently ignores both `num_ctx` and
+  `think`, the latter discovered when a hybrid-reasoning vision model
+  (`qwen3.5:4b`) kept a chain-of-thought running no matter what was sent —
+  see `extraction/client.py`.
 * The same rows drive the review UI's labels and the export's labels, so a
   schema edit changes the prompt, the screen and the export together.
 * Model output is untrusted: coerced to a known shape, grounded against page

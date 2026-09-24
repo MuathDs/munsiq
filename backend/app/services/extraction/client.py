@@ -1,8 +1,25 @@
-"""OpenAI-compatible inference client.
+"""Ollama's native inference client.
 
-Points at ``settings.INFERENCE_BASE_URL`` — Ollama locally. Written against the
-OpenAI wire format so the endpoint can move to vLLM later with a URL change and
-no code change.
+Points at ``settings.INFERENCE_BASE_URL`` (Ollama's own origin, e.g.
+``http://localhost:11434`` — no ``/v1``) and calls ``/api/chat``, NOT the
+OpenAI-compatible ``/v1/chat/completions``. This was deliberately the OpenAI
+wire format until 2026-09-24, so the endpoint could move to vLLM later with a
+URL change and no code change. That stopped being safe to keep: verified
+against Ollama 0.34.1, the ``/v1`` endpoint silently accepts and ignores
+``think`` — a hybrid-reasoning model (qwen3.5, family ``qwen35``) keeps
+thinking regardless of what is sent, exactly the same failure shape as
+``INFERENCE_NUM_CTX`` (also silently ignored over ``/v1``, see config.py).
+The native endpoint honours ``think`` correctly (checked directly: identical
+request through `/api/chat` with ``think: false`` returns no reasoning at all
+and a fraction of the completion tokens). A hybrid-reasoning model that never
+stops thinking is not a config nuance here — it burns the context budget on
+prose the JSON parser never sees, which is the exact class of bug this
+codebase treats as a correctness bug, not a latency one.
+
+Losing the trivial vLLM swap is the accepted cost. vLLM's OpenAI-compatible
+endpoint has its own (different) way to disable Qwen3 thinking
+(``chat_template_kwargs: {"enable_thinking": false}``), so that swap was never
+truly a "URL change and no code change" for a thinking model anyway.
 
 Ollama is a development choice, not a production one: it has no built-in
 authentication and its throughput flattens at a handful of concurrent requests.
@@ -12,6 +29,12 @@ The model is ``settings.INFERENCE_MODEL``, default ``qwen2.5:7b-instruct`` — a
 general instruct model, NOT the munsiq-extractor fine-tune. That fine-tune has a
 fixed five-column schema baked into its weights; this phase passes the field
 list in the prompt at runtime instead. Using it would defeat the design.
+
+Every call sends temperature, seed and think EXPLICITLY — never relying on the
+server's defaults. qwen3.5 defaults to temperature 1 in Ollama (checked via
+``/api/show``), which alone turned a manual 8/9-correct read into 3/9 with
+invented values. ``test_inference_client.py`` asserts these three are present
+and correct on every call, images or not, json_mode or not.
 """
 
 from __future__ import annotations
@@ -69,7 +92,7 @@ class InferenceClient(Protocol):
 
 
 class OllamaClient:
-    """Minimal OpenAI-compatible chat client with jittered retries."""
+    """Minimal native-API Ollama chat client with jittered retries."""
 
     def __init__(
         self,
@@ -86,48 +109,59 @@ class OllamaClient:
         self.max_retries = settings.INFERENCE_MAX_RETRIES if max_retries is None else max_retries
         # Defaults to the text path's budget. A vision client passes
         # VISION_NUM_CTX explicitly — an image costs real context, and the two
-        # models are not interchangeable here (see config.py).
+        # models are not interchangeable here (see config.py). Sent as
+        # options.num_ctx below — the native endpoint actually honours it
+        # (checked directly: a small num_ctx measurably truncates
+        # prompt_eval_count), unlike the OpenAI-compatible endpoint this client
+        # used before 2026-09-24.
         self.num_ctx = settings.INFERENCE_NUM_CTX if num_ctx is None else num_ctx
 
     def chat(
         self, *, system: str, user: str, images: list[bytes] | None = None, json_mode: bool = True
     ) -> ChatResult:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        if images:
+            messages[1] = _with_images(user, images)
+
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            # Temperature 0: extraction is not a creative task, and a stable
-            # output is what makes a regression measurable.
-            "temperature": 0,
-            "seed": get_settings().INFERENCE_SEED,
+            "messages": messages,
+            "options": {
+                # Temperature 0: extraction is not a creative task, and a
+                # stable output is what makes a regression measurable.
+                "temperature": 0,
+                "seed": get_settings().INFERENCE_SEED,
+                "num_ctx": self.num_ctx,
+            },
+            # Explicit, always — never the server's default. A hybrid-reasoning
+            # model (qwen3.5) keeps a chain-of-thought running otherwise, which
+            # costs real context and, at this model's default temperature 1,
+            # measurably changes the answer. See the module docstring.
+            "think": False,
             "stream": False,
         }
         if json_mode:
-            payload["response_format"] = {"type": "json_object"}
-        if images:
-            # Vision path is opt-in and untested at 4GB; the shape is here so
-            # enabling it is a config change rather than a rewrite.
-            payload["messages"][1] = _with_images(user, images)
+            payload["format"] = "json"
 
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             started = time.monotonic()
             try:
                 with httpx.Client(timeout=self.timeout_s) as client:
-                    response = client.post(f"{self.base_url}/chat/completions", json=payload)
+                    response = client.post(f"{self.base_url}/api/chat", json=payload)
                     response.raise_for_status()
                     body = response.json()
-                choice = body["choices"][0]
-                usage = body.get("usage") or {}
+                message = body["message"]
                 result = ChatResult(
-                    content=choice["message"]["content"],
+                    content=message["content"],
                     model=body.get("model", self.model),
                     latency_ms=int((time.monotonic() - started) * 1000),
-                    prompt_tokens=usage.get("prompt_tokens"),
-                    completion_tokens=usage.get("completion_tokens"),
-                    finish_reason=choice.get("finish_reason"),
+                    prompt_tokens=body.get("prompt_eval_count"),
+                    completion_tokens=body.get("eval_count"),
+                    finish_reason=body.get("done_reason"),
                 )
             except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
                 last_error = exc
@@ -184,12 +218,12 @@ def _refuse_if_context_exhausted(result: ChatResult, num_ctx: int) -> None:
 
 
 def _with_images(text: str, images: list[bytes]) -> dict[str, Any]:
+    """Ollama's native format: base64 strings on an ``images`` field, no
+    data-URI wrapper and no OpenAI-style content-parts array."""
     import base64
 
-    parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
-    for image in images:
-        encoded = base64.b64encode(image).decode("ascii")
-        parts.append(
-            {"type": "image_url", "image_url": {"url": f"data:image/webp;base64,{encoded}"}}
-        )
-    return {"role": "user", "content": parts}
+    return {
+        "role": "user",
+        "content": text,
+        "images": [base64.b64encode(image).decode("ascii") for image in images],
+    }
