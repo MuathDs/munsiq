@@ -163,7 +163,7 @@ async def _context_from_db(
         for row in field_rows
     }
 
-    numeric_keys = await _numeric_keys(session, header.schema_id, set(views))
+    numeric_keys, required_keys = await _schema_keys(session, header.schema_id, set(views))
 
     page_rows = (
         await session.execute(
@@ -174,35 +174,41 @@ async def _context_from_db(
     page_text = "\n".join(row.ocr_text for row in page_rows if row.ocr_text)
 
     invoice = _load_ubl(header.embedded_ubl_key)
-    return _assemble(views, numeric_keys, page_text, invoice)
+    return _assemble(views, numeric_keys, required_keys, page_text, invoice)
 
 
-async def _numeric_keys(
+async def _schema_keys(
     session: AsyncSession, schema_id: uuid.UUID | None, present: set[str]
-) -> frozenset[str]:
-    """Which fields the schema declares numeric.
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Which fields the annotation's own schema declares numeric, and required.
 
-    OCR_SUBSTRING_MISSING only applies to these, so getting it wrong either
-    skips the anti-hallucination guard or applies it to prose.
+    OCR_SUBSTRING_MISSING only applies to numeric ones, so getting that wrong
+    either skips the anti-hallucination guard or applies it to prose. Required
+    ones back REQUIRED_FIELD_MISSING, and are NOT narrowed to `present`: a
+    required field with no row at all is missing too.
     """
+    empty: tuple[frozenset[str], frozenset[str]] = (frozenset(), frozenset())
     if schema_id is None:
-        return frozenset()
+        return empty
     definition = await session.scalar(
         sql("SELECT definition FROM extraction_schemas WHERE id = :s"), {"s": schema_id}
     )
     if not isinstance(definition, dict):
-        return frozenset()
+        return empty
     fields = definition.get("fields")
     if not isinstance(fields, list):
-        return frozenset()
-    return frozenset(
+        return empty
+    specs = [spec for spec in fields if isinstance(spec, dict) and "key" in spec]
+    numeric = frozenset(
         str(spec["key"])
-        for spec in fields
-        if isinstance(spec, dict)
-        and "key" in spec
-        and str(spec.get("type", "")).strip().lower() in NUMERIC_TYPES
+        for spec in specs
+        if str(spec.get("type", "")).strip().lower() in NUMERIC_TYPES
         and str(spec["key"]) in present
     )
+    # bool(), exactly as FieldSpec.from_definition reads it, so the pipeline and
+    # revalidation can never disagree about which fields are required.
+    required = frozenset(str(spec["key"]) for spec in specs if bool(spec.get("required", False)))
+    return numeric, required
 
 
 def _load_ubl(embedded_ubl_key: str | None) -> UBLInvoice | None:
@@ -224,6 +230,7 @@ def _load_ubl(embedded_ubl_key: str | None) -> UBLInvoice | None:
 def _assemble(
     views: dict[str, FieldView],
     numeric_keys: frozenset[str],
+    required_keys: frozenset[str],
     page_text: str,
     invoice: UBLInvoice | None,
 ) -> ValidationContext:
@@ -257,6 +264,7 @@ def _assemble(
     return ValidationContext(
         fields=views,
         numeric_keys=numeric_keys,
+        required_keys=required_keys,
         lines=lines,
         page_text=page_text,
         invoice_type_code=invoice_type_code,

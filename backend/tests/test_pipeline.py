@@ -223,6 +223,53 @@ async def test_correct_nulls_are_written_as_rows_not_dropped(tenant, monkeypatch
     assert fields["purchase_order_number"]["value"] is None
 
 
+class NullTotalClient(RecordingClient):
+    """The model returns null for a REQUIRED field."""
+
+    def chat(self, *, system, user, images=None, json_mode=True):  # type: ignore[no-untyped-def]
+        result = super().chat(system=system, user=user, images=images, json_mode=json_mode)
+        result.content = json.dumps(
+            {
+                "invoice_number": "SA-2026-0334",
+                "seller_trn": "310122393510003",
+                "total_amount": None,
+                "purchase_order_number": None,
+            }
+        )
+        return result
+
+
+async def test_a_null_required_field_is_never_left_green(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The schema here gives total_amount no label, so the silent-miss check has
+    nothing to look for on the page: before REQUIRED_FIELD_MISSING, this null was
+    written auto_validated. The optional null next to it stays a correct null."""
+    org_id, queue_id = tenant
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", NullTotalClient)
+    document_id = await _insert_document(org_id, queue_id, fixtures.build_pdf_with_text_layer())
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+    assert outcome.error is None and outcome.annotation_id is not None
+
+    fields = await _fields(org_id, outcome.annotation_id)
+    assert fields["total_amount"]["value"] is None
+    assert fields["total_amount"]["state"] == "review_suggested"
+    assert fields["purchase_order_number"]["state"] == "auto_validated"
+
+    async with get_sessionmaker()() as session, session.begin():
+        findings = (
+            await session.execute(
+                sql(
+                    "SELECT field_key, severity FROM validation_results "
+                    "WHERE annotation_id = :a AND rule_code = 'REQUIRED_FIELD_MISSING' "
+                    "AND passed = false"
+                ),
+                {"a": outcome.annotation_id},
+            )
+        ).all()
+    assert [(f.field_key, f.severity) for f in findings] == [("total_amount", "warning")]
+    assert "REQUIRED_FIELD_MISSING" not in outcome.blockers
+
+
 async def test_values_are_grounded_to_the_text_layer(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Grounding on a text-layer page comes from the PDF's own word boxes."""
     org_id, queue_id = tenant

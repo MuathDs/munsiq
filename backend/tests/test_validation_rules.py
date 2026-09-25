@@ -36,6 +36,7 @@ from app.services.validation.rules.arithmetic import (
     subtotal_is_not_the_total,
     vat_amount_matches_rate,
 )
+from app.services.validation.rules.completeness import required_fields_are_present
 from app.services.validation.rules.provenance import (
     arabic_survived_the_xml,
     numeric_values_appear_on_the_page,
@@ -702,6 +703,96 @@ def test_encoding_rule_ignores_non_ubl_names() -> None:
         pdf_has_arabic=True,
     )
     assert arabic_survived_the_xml(context) is None
+
+
+# --------------------------------------------------------------------------- #
+# REQUIRED_FIELD_MISSING — a null required field must never look settled
+# --------------------------------------------------------------------------- #
+def test_a_null_required_field_is_flagged_for_review() -> None:
+    """The gap this closes: on a real invoice the model returned null for a
+    required subtotal and the field was recorded auto_validated — green — because
+    its label was printed with a generic word the silent-miss check did not know.
+    Nothing but an unrelated blank page kept that document from looking done."""
+    context = ctx(
+        fields={"subtotal": None, "total_amount": "115.00"},
+        required_keys=frozenset({"subtotal", "total_amount"}),
+    )
+
+    findings = required_fields_are_present(context)
+
+    assert findings is not None and len(findings) == 1
+    finding = findings[0]
+    assert finding.code == "REQUIRED_FIELD_MISSING"
+    assert finding.field_key == "subtotal"
+    assert finding.severity is Severity.WARNING, "review_suggested, not blocking"
+    assert finding.passed is False
+    assert "subtotal" in finding.message_en
+    assert "subtotal" in finding.message_ar
+    assert any("؀" <= ch <= "ۿ" for ch in finding.message_ar)
+
+
+def test_every_null_required_field_gets_its_own_finding() -> None:
+    context = ctx(
+        fields={"subtotal": None, "vat_amount": None, "total_amount": "10.00"},
+        required_keys=frozenset({"subtotal", "vat_amount", "total_amount"}),
+    )
+
+    findings = required_fields_are_present(context)
+
+    assert findings is not None
+    assert sorted(f.field_key or "" for f in findings) == ["subtotal", "vat_amount"]
+
+
+def test_a_blank_required_value_counts_as_null() -> None:
+    """A reviewer clearing a field leaves an empty string, not None."""
+    context = ctx(fields={"subtotal": "   "}, required_keys=frozenset({"subtotal"}))
+
+    findings = required_fields_are_present(context)
+
+    assert findings is not None and [f.field_key for f in findings] == ["subtotal"]
+
+
+def test_a_required_field_with_no_row_at_all_is_flagged() -> None:
+    context = ctx(fields={"total_amount": "10.00"}, required_keys=frozenset({"subtotal"}))
+
+    findings = required_fields_are_present(context)
+
+    assert findings is not None and [f.field_key for f in findings] == ["subtotal"]
+
+
+def test_present_required_fields_pass() -> None:
+    context = ctx(
+        fields={"subtotal": "100.00", "total_amount": "115.00"},
+        required_keys=frozenset({"subtotal", "total_amount"}),
+    )
+
+    assert required_fields_are_present(context) == []
+
+
+def test_a_null_optional_field_is_not_flagged() -> None:
+    """A correct null for an optional field is a negative example, not a gap."""
+    context = ctx(
+        fields={"purchase_order_number": None, "total_amount": "10.00"},
+        required_keys=frozenset({"total_amount"}),
+    )
+
+    assert required_fields_are_present(context) == []
+
+
+def test_a_schema_with_no_required_fields_is_not_applicable() -> None:
+    assert required_fields_are_present(ctx(fields={"subtotal": None})) is None
+
+
+def test_a_missing_required_field_marks_the_field_warned_but_never_blocks() -> None:
+    """Through the engine, which is what the pipeline and revalidation read:
+    the field lands in warned_field_keys (auto_validated -> review_suggested)
+    and not in blockers, so a reviewer can still confirm a genuinely absent
+    field after checking it."""
+    report = run_rules(ctx(fields={"subtotal": None}, required_keys=frozenset({"subtotal"})))
+
+    assert "subtotal" in report.warned_field_keys
+    assert "subtotal" not in report.blocking_field_keys
+    assert "REQUIRED_FIELD_MISSING" not in report.blockers
 
 
 # --------------------------------------------------------------------------- #

@@ -6,6 +6,6 @@ here is all that is needed for its rules to run.
 
 from __future__ import annotations
 
-from app.services.validation.rules import arithmetic, provenance, zatca
+from app.services.validation.rules import arithmetic, completeness, provenance, zatca
 
-__all__ = ["arithmetic", "provenance", "zatca"]
+__all__ = ["arithmetic", "completeness", "provenance", "zatca"]

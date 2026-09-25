@@ -48,6 +48,7 @@ def build_context(
     numeric_keys = frozenset(
         spec.key for spec in fields if spec.type.strip().lower() in NUMERIC_TYPES
     )
+    required_keys = frozenset(spec.key for spec in fields if spec.required)
 
     page_text = "\n".join(page.text for page in pages if page.text)
     pdf_has_arabic = any(has_arabic(page.text) for page in pages if page.text)
@@ -83,6 +84,7 @@ def build_context(
     return ValidationContext(
         fields=views,
         numeric_keys=numeric_keys,
+        required_keys=required_keys,
         lines=lines,
         page_text=page_text,
         invoice_type_code=invoice_type_code,

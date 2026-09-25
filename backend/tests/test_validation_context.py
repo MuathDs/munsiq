@@ -51,6 +51,20 @@ def _values() -> list[ExtractedValue]:
     ]
 
 
+def test_required_keys_come_from_the_schema() -> None:
+    """REQUIRED_FIELD_MISSING is schema-driven: `required` is schema data, like
+    the labels, and nothing in the rules hardcodes which fields matter."""
+    fields = [
+        FieldSpec(key="invoice_number", required=True),
+        FieldSpec(key="total_amount", type="decimal", required=True),
+        FieldSpec(key="purchase_order_number"),
+    ]
+
+    context = build_context(values=_values(), fields=fields, pages=PAGES)
+
+    assert context.required_keys == frozenset({"invoice_number", "total_amount"})
+
+
 def test_numeric_keys_come_from_the_schema_types() -> None:
     """Which fields get the anti-hallucination check is schema-driven."""
     context = build_context(values=_values(), fields=FIELDS, pages=PAGES)

@@ -334,6 +334,40 @@ async def test_a_wrong_correction_keeps_the_blocker(fx: Fx) -> None:
     assert confirm.status_code == 409
 
 
+async def test_revalidation_turns_a_green_null_required_field_amber(fx: Fx) -> None:
+    """The real invoice's shape: a required field extracted as null and stored
+    auto_validated. Revalidation reads `required` from the annotation's own
+    schema, flags it, and moves it to review_suggested — without blocking."""
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql(
+                "UPDATE extracted_fields SET value_extracted = NULL, "
+                "validation_state = 'auto_validated' "
+                "WHERE annotation_id = :a AND field_key = 'subtotal'"
+            ),
+            {"a": fx.annotation_id},
+        )
+
+    async with client_as(fx.org_id) as c:
+        r = await c.patch(
+            f"/api/v1/annotations/{fx.annotation_id}/fields",
+            json={"events": [{"field_key": "total_amount", "new_value": "51750.00"}]},
+        )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    subtotal = next(f for f in body["fields"] if f["field_key"] == "subtotal")
+    assert subtotal["validation_state"] == "review_suggested"
+    missing = [
+        f
+        for f in body["findings"]
+        if f["rule_code"] == "REQUIRED_FIELD_MISSING" and not f["passed"]
+    ]
+    assert [(f["field_key"], f["severity"]) for f in missing] == [("subtotal", "warning")]
+    assert missing[0]["message_ar"] and missing[0]["message_en"]
+    assert "REQUIRED_FIELD_MISSING" not in body["blockers"]
+
+
 async def test_correction_is_logged_for_the_flywheel(fx: Fx) -> None:
     """field_corrections is append-only and feeds the correction-rate metrics."""
     async with client_as(fx.org_id) as c:

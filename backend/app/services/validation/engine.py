@@ -105,6 +105,8 @@ class ValidationContext:
 
     fields: dict[str, FieldView] = field(default_factory=dict)
     numeric_keys: frozenset[str] = frozenset()
+    required_keys: frozenset[str] = frozenset()
+    """Header fields the schema marks required. Backs REQUIRED_FIELD_MISSING."""
     lines: list[LineItem] = field(default_factory=list)
 
     page_text: str = ""

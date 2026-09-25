@@ -45,7 +45,7 @@ flowchart TD
     G --> E
     D --> H["Grounding<br/>value → normalized bbox 0.0–1.0"]
     E --> H
-    H --> I["Deterministic validation<br/>17 rules · bilingual messages<br/>errors block confirmation"]
+    H --> I["Deterministic validation<br/>18 rules · bilingual messages<br/>errors block confirmation"]
     I --> J[("PostgreSQL<br/>RLS FORCEd per tenant")]
     J --> K["Review workspace<br/>ar/en · RTL · provenance badges<br/>click a field → box on the page"]
     K -->|"corrections → revalidate"| I
@@ -98,9 +98,9 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **466 passed, 1 skipped, 1 xfailed — 21m33s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-24. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
-| Validation rules | **17** (10 blocking errors, 7 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-23 |
-| Validation coverage | **100% statements and branches** — 473 statements, 156 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`; 98 tests, **1.5 s** without coverage instrumentation (the rules are pure functions) |
+| Backend test suite | **477 passed, 1 skipped, 1 xfailed — 24m04s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-25. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Validation rules | **18** (10 blocking errors, 8 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-25 |
+| Validation coverage | **100% statements and branches** — 501 statements, 172 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-25; 120 tests, **2.3 s** without coverage instrumentation (the rules are pure functions) |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
 | Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies`, 2026-09-20 |
 | Document A, compliant | **0 model calls**; 19 fields (11 header + 8 line-item cells); 9/11 header and 5/8 line cells grounded; no blockers | queried from the database, 2026-09-20 |
@@ -138,7 +138,7 @@ run (recorded in `CLAUDE.md`).
 | Seller VAT number | ✓ | ✗ swapped with the buyer's | ✓ |
 | Buyer name | ✓ | ✗ | ✓ |
 | Buyer VAT number | ✓ | ✗ swapped with the seller's | ✓ |
-| Subtotal | ✗ returned null | ✓ | ✗ |
+| Subtotal | ✗ returned null, now flagged for review | ✓ | ✗ |
 | VAT amount | ✓ | ✓ | ✓ |
 | Total | ✓ | ✓ | ✗ |
 | **Correct** | **8 / 9** | **5 / 9** | **7 / 9** |
@@ -399,14 +399,15 @@ What is built, and where it is weak. Numbers are measured on this machine.
   with the one tax-invoice schema in one prompt, so which total comes back
   depends on which page the model weighs more. It picked the right one; nothing
   guarantees that, and the reviewer is not told a second document was there.
-* **A missing required field can look settled.** No rule blocks on a null
-  required field by itself. A null is flagged only when the field's label or a
-  synonym is found printed on the page. On the invoice in Results, the text path
-  returned a null subtotal and marked it validated, because that invoice labels
-  its subtotal with a generic word ("المجموع", "sum") that is not the field's
-  label. The document stayed blocked only because its blank second page
-  happened to trigger the degraded-page rule. On a clean one-page invoice it
-  would have looked finished.
+* **A reviewer's correction erases page-level findings.** Revalidation replaces
+  every finding with what the rules produce, but unreadable-page findings
+  (`OCR_SCRIPT_UNSUPPORTED` and three siblings) are written by the pipeline,
+  not by a rule, so they vanish on the first edit, blocking ones included. A
+  document blocked by an unreadable page becomes confirmable after an
+  unrelated correction. Seen on the invoice in Results; recorded, not fixed.
+* **A reviewer's delete does not take.** A delete stores "no final value",
+  which the app also uses to mean "never edited", so the extracted value comes
+  back. Found by reading the code.
 * **A blank page forces the vision model.** Routing treats a page with no text
   as needing vision, and one such page moves the whole call to the vision
   model. In Results that cost a field against the text path.

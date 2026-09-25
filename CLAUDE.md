@@ -301,6 +301,48 @@ FIXED, and worth remembering why:
   `VISION_MODEL`'s default, replacing `qwen2.5vl:3b` — it also has vision
   capability itself (`ollama show` lists `vision` alongside `thinking`),
   which is how the same bare-prompt comparison was possible on one model.
+- **A null REQUIRED field showed green** (fixed 2026-09-25). On the contractor
+  invoice the text path returned null for the required `subtotal` and wrote it
+  `auto_validated`. The silent-miss check (`extraction/labels.py`) never fired:
+  the page labels its subtotal "المجموع" ("sum"), a generic word no subtotal
+  synonym can safely include because totals use it too. No rule looked at
+  `required` at all, and the document stayed blocked only because its blank
+  page 2 happened to trigger `OCR_SCRIPT_UNSUPPORTED` — a clean one-page invoice
+  would have looked finished. `REQUIRED_FIELD_MISSING` (new, WARNING,
+  `rules/completeness.py`) flags every required field with no non-blank value,
+  one finding per field, so the engine's existing warning path moves it
+  `auto_validated` → `review_suggested` in the pipeline and on every
+  revalidation. It reads `required` from the schema — `ValidationContext.
+  required_keys`, filled by `build_context` from `FieldSpec.required` and by
+  `revalidate._schema_keys` from the annotation's own stored schema with the
+  same `bool()` reading, so the two paths cannot disagree. A warning, not an
+  error: a field genuinely absent from the document can still be confirmed
+  after a person has looked. Rule count 18 (10 errors, 8 warnings).
+  `tests/test_validation_rules.py` (the REQUIRED_FIELD_MISSING section),
+  `test_pipeline.py::test_a_null_required_field_is_never_left_green`,
+  `test_workspace_api.py::test_revalidation_turns_a_green_null_required_field_amber`.
+
+  Found alongside, NOT fixed — both are pre-existing and recorded rather than
+  fixed out of scope:
+
+  * **Revalidation erases page-level findings, blocking ones included.**
+    `revalidate_annotation` deletes EVERY `validation_results` row and
+    re-inserts only what the rule registry produces. `OCR_SCRIPT_UNSUPPORTED`,
+    `OCR_ENGINE_UNAVAILABLE`, `PAGE_TEXT_EMPTY` and `PAGE_TEXT_UNAVAILABLE` are
+    written by `pipeline._record_findings`, not by rules, so they do not come
+    back: a document blocked by an unreadable page becomes confirmable after a
+    reviewer corrects any unrelated field. Seen directly: revalidating the
+    contractor invoice (to confirm the fix above) removed its
+    `OCR_SCRIPT_UNSUPPORTED` error, and its `blockers` went to `[]`. The fix is
+    to delete only rows whose `rule_code` is in the registry, or to recompute
+    the page findings on revalidation from the stored `pages.text_source`.
+  * **A reviewer's `delete` never takes effect.** The corrections endpoint
+    writes `value_final = NULL` for a delete, and NULL there means "never
+    edited" to both `revalidate` and the UI's `currentValue()`, so the original
+    extracted value comes back. Found by reading the code, not by a failing
+    test. Needs a representation for "deliberately emptied" (an empty string,
+    or a flag) — until then REQUIRED_FIELD_MISSING cannot see a reviewer's
+    deletion, only an extracted null or a field cleared to an empty string.
 - **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
   `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
   and a fixed seed changed nothing (greedy decoding). Consecutive documents share
@@ -394,7 +436,8 @@ FIXED, and worth remembering why:
 - HARD RULE, unchanged: no frontend code calls a model endpoint. All inference
   goes through the FastAPI backend.
 - Inference is reached ONLY via `settings.INFERENCE_BASE_URL`
-  (default `http://localhost:11434/v1`). Never hardcode a model URL.
+  (default `http://localhost:11434`, Ollama's origin — no `/v1`). Never
+  hardcode a model URL.
 
 ## Conventions
 - Backend: ruff + mypy strict. Tests with pytest + pytest-asyncio.

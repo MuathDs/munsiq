@@ -93,6 +93,23 @@ Values sourced from the signed UBL are exempt: they were read from an
 attachment, not the rendered page, and a compliant invoice can legitimately
 carry a value in its XML that is not printed on its face.
 
+### Completeness — `rules/completeness.py`
+
+| Code | Severity | Check |
+| --- | --- | --- |
+| `REQUIRED_FIELD_MISSING` | warning | every field the schema marks `required` has a non-blank value — one finding per missing field |
+
+A null is a correct answer for an optional field and is kept as a negative
+example. For a required field it is never settled, so this moves the field from
+`auto_validated` to `review_suggested` (amber) wherever the rules run: the
+pipeline and every revalidation. It reads `required` from the annotation's own
+schema, the same way the pipeline does, and does not depend on the page — the
+silent-miss check in `extraction/labels.py` only catches a null whose label is
+printed and recognised, and a real invoice labelled its subtotal with a generic
+word that no subtotal synonym can safely include. A warning, not an error: a
+field that genuinely is not on the document can still be confirmed, after a
+person has looked.
+
 ## Blocking and confirmation
 
 A rule with `severity=error` that fails sets the related field's
@@ -119,14 +136,22 @@ not add up" is far less useful to a reviewer than naming both numbers:
 
 ## Coverage
 
+Measured 2026-09-25, `pytest --cov=app/services/validation --cov-branch` over
+`test_validation_rules.py` and `test_validation_context.py` (120 tests):
+
 ```
-Name                                   Stmts   Miss Branch BrPart  Cover
-------------------------------------------------------------------------
-app/services/validation/context.py        33      0      4      0   100%
-app/services/validation/engine.py        152      0     18      0   100%
-app/services/validation/rules/*.py       250      0    126      0   100%
-------------------------------------------------------------------------
-TOTAL                                    442      0    148      0   100%
+Name                                            Stmts   Miss Branch BrPart  Cover
+---------------------------------------------------------------------------------
+app/services/validation/__init__.py                 4      0      0      0   100%
+app/services/validation/context.py                 34      0      4      0   100%
+app/services/validation/engine.py                 160      0     18      0   100%
+app/services/validation/rules/__init__.py           3      0      0      0   100%
+app/services/validation/rules/arithmetic.py        93      0     46      0   100%
+app/services/validation/rules/completeness.py      13      0      6      0   100%
+app/services/validation/rules/provenance.py        89      0     44      0   100%
+app/services/validation/rules/zatca.py            105      0     54      0   100%
+---------------------------------------------------------------------------------
+TOTAL                                             501      0    172      0   100%
 ```
 
 Statement *and* branch coverage, since a rule's value is entirely in its edge
