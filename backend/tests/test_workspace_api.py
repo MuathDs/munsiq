@@ -506,6 +506,50 @@ async def test_a_computed_field_is_served_with_its_provenance(fx: Fx) -> None:
     assert subtotal["source"] == "computed"
 
 
+async def _set_field(fx: Fx, key: str, *, value: str, source: str, model_value: str) -> None:
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql(
+                "UPDATE extracted_fields SET value_extracted = :v, source = :src, "
+                "model_value = :m WHERE annotation_id = :a AND field_key = :k"
+            ),
+            {"v": value, "src": source, "m": model_value, "a": fx.annotation_id, "k": key},
+        )
+
+
+async def test_a_qr_disagreement_survives_revalidation(fx: Fx) -> None:
+    """The model's reading is persisted beside the QR value, so re-checking
+    after an unrelated edit recomputes the warning instead of dropping it."""
+    await _set_field(fx, "vat_amount", value="6750.00", source="qr", model_value="6705.00")
+
+    body = await _patch_total(fx)
+
+    warned = [
+        (f["field_key"], f["severity"])
+        for f in body["findings"]
+        if f["rule_code"] == "QR_MODEL_MISMATCH" and not f["passed"]
+    ]
+    assert warned == [("vat_amount", "warning")]
+    vat = next(f for f in body["fields"] if f["field_key"] == "vat_amount")
+    assert vat["source"] == "qr", "the API serves the new provenance"
+
+
+async def test_an_xml_disagreement_survives_revalidation(fx: Fx) -> None:
+    """The same persisted reading closes the older gap: XML_PDF_MISMATCH used to
+    vanish on the first edit because nothing stored what the model had read."""
+    await _set_field(
+        fx, "seller_trn", value="310122393510003", source="ubl_xml", model_value="310122393510009"
+    )
+
+    body = await _patch_total(fx)
+
+    assert [
+        f["field_key"]
+        for f in body["findings"]
+        if f["rule_code"] == "XML_PDF_MISMATCH" and not f["passed"]
+    ] == ["seller_trn"]
+
+
 async def test_correction_is_logged_for_the_flywheel(fx: Fx) -> None:
     """field_corrections is append-only and feeds the correction-rate metrics."""
     async with client_as(fx.org_id) as c:

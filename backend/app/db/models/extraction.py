@@ -79,7 +79,7 @@ class ExtractedField(Base, OrgScopedMixin):
     """One field value, with its provenance.
 
     ``source`` mirrors the ExtractedField schema in app/schemas/invoice.py:
-    'ubl_xml' | 'vlm' | 'ocr_rule' | 'human' | 'computed'. A 'ubl_xml' value came out of the
+    'ubl_xml' | 'vlm' | 'ocr_rule' | 'human' | 'computed' | 'qr'. A 'ubl_xml' value came out of the
     signed attachment and must never be overwritten by a model.
 
     NOTE for Phase 4: rows with ``value_extracted IS NULL`` are meaningful and
@@ -111,6 +111,10 @@ class ExtractedField(Base, OrgScopedMixin):
     row_index: Mapped[int | None] = mapped_column(Integer)
     value_extracted: Mapped[str | None] = mapped_column(Text)
     value_final: Mapped[str | None] = mapped_column(Text)
+    # What the MODEL read for a field another source owns (signed XML or the
+    # ZATCA QR). Never the field's value; kept so XML_PDF_MISMATCH and
+    # QR_MODEL_MISMATCH can be recomputed after any edit.
+    model_value: Mapped[str | None] = mapped_column(Text)
     value_normalized: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
     source: Mapped[str | None] = mapped_column(Text)

@@ -7,6 +7,20 @@ A portfolio project, built as a working system rather than a demo: Postgres with
 row-level security, a real extraction pipeline, a deterministic rules engine, a
 bilingual review workspace with full RTL, and a versioned export.
 
+**All processing is local.** Extraction runs on a local model served by Ollama
+on `localhost`; QR decoding, OCR, grounding and validation are local code. No
+cloud AI API is called, and the PDF and its page images are stored on this
+machine (`STORAGE_DIR`) and never uploaded anywhere. Where the model is reached
+is configuration — `INFERENCE_BASE_URL` and `VISION_INFERENCE_BASE_URL`, both
+`http://localhost:11434` by default — and pointing either at another host would
+send page text or page images there.
+
+**One exception, stated plainly: the database.** In the setup measured here,
+Postgres is a hosted Supabase instance, and it stores each page's text layer
+and every extracted value — the contents of the document, if not the file. A
+fully local deployment points `DATABASE_URL` at a Postgres on this machine;
+nothing else changes.
+
 ---
 
 ## The problem
@@ -38,14 +52,15 @@ flowchart TD
     A["Upload · presigned URL<br/>PDF posted straight to the API"] --> B["Hash first: a resend returns the existing document<br/>Object storage + document row, committed"]
     B --> C{"Embedded UBL XML?"}
     C -->|"yes — Step Zero"| D["Parse signed UBL<br/>header + line items<br/>source=ubl_xml · confidence 1.0<br/><b>model never called</b>"]
-    C -->|"no"| E["Schema-conditioned extraction<br/>field list read from the database<br/>Ollama · native API"]
+    C -->|"no"| E["Schema-conditioned extraction<br/>field list read from the database<br/>local Ollama · native API"]
+    E --> Q["ZATCA QR on the page?<br/>decoded with OpenCV, no model<br/>5 fields source=qr · subtotal computed"]
     B --> F["Rasterize → one WebP per page"]
     F --> G["Text layer per page<br/>OCR only where there is none<br/>degraded pages recorded, not hidden"]
     G --> D
     G --> E
     D --> H["Grounding<br/>value → normalized bbox 0.0–1.0"]
-    E --> H
-    H --> I["Deterministic validation<br/>18 rules · bilingual messages<br/>errors block confirmation"]
+    Q --> H
+    H --> I["Deterministic validation<br/>19 rules · bilingual messages<br/>errors block confirmation"]
     I --> J[("PostgreSQL<br/>RLS FORCEd per tenant")]
     J --> K["Review workspace<br/>ar/en · RTL · provenance badges<br/>click a field → box on the page"]
     K -->|"corrections → revalidate"| I
@@ -98,9 +113,9 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **519 passed, 1 skipped, 1 xfailed — 25m00s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-30. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
-| Validation rules | **18** (10 blocking errors, 8 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-25 |
-| Validation coverage | **100% statements and branches** — 559 statements, 186 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-30; 138 tests, **2.4 s** without coverage instrumentation (the rules are pure functions) |
+| Backend test suite | **554 passed, 1 skipped, 1 xfailed — 28m31s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-30. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Validation rules | **19** (10 blocking errors, 9 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-30 |
+| Validation coverage | **100% statements and branches** — 601 statements, 204 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-30; 165 tests, **6.3 s** without coverage instrumentation — 1.8 s for the rules alone (pure functions), the rest is `test_qr.py` rasterizing and decoding synthetic QR pages |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
 | Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies`, 2026-09-20 |
 | Document A, compliant | **0 model calls**; 19 fields (11 header + 8 line-item cells); 9/11 header and 5/8 line cells grounded; no blockers | queried from the database, 2026-09-20 |
@@ -168,6 +183,55 @@ invented computed values; `qwen3.5:4b` with temperature 0, a fixed seed and
 thinking off scored 8/9. Ollama defaults that model to temperature 1, and its
 OpenAI-compatible endpoint silently ignores `think`, which is why the client
 now calls Ollama's native API and pins all three on every request.
+
+### Reading the ZATCA QR: off vs on
+
+A simplified (B2C) receipt carries no XML, but must print the ZATCA QR. Decoding
+it (OpenCV, no model) gives the seller name, VAT number, date, total and VAT
+exactly; the subtotal then follows as total − VAT. Measured 2026-09-30 with
+`scripts/benchmark.py --qr off|on` on the eight **synthetic** test invoices
+(`scripts/make_test_invoices.py`; two are receipts with a QR, 07 English and 08
+Arabic), local Ollama, eleven header fields per invoice. The model reads every
+invoice, signed XML ignored, so the six non-receipts are the same with QR on or
+off and only the receipts can move.
+
+| Field | Text `qwen2.5:7b-instruct`<br/>QR off → on | Vision `qwen3.5:4b`<br/>QR off → on |
+| --- | :---: | :---: |
+| Invoice number | 8/8 → 8/8 | 8/8 → 8/8 |
+| Issue date | 8/8 → 8/8 | 8/8 → 8/8 |
+| Seller name | 8/8 → 8/8 | 5/8 → **6/8** |
+| Seller VAT number | 8/8 → 8/8 | 8/8 → 8/8 |
+| Buyer name | 8/8 → 8/8 | 5/8 → 5/8 |
+| Buyer VAT number | 8/8 → 8/8 | 8/8 → 8/8 |
+| Subtotal | 6/8 → **8/8** | 5/8 → **7/8** |
+| VAT amount | 8/8 → 8/8 | 8/8 → 8/8 |
+| Total | 8/8 → 8/8 | 5/8 → **7/8** |
+| Currency | 8/8 → 8/8 | 8/8 → 8/8 |
+| PO number | 8/8 → 8/8 | 8/8 → 8/8 |
+| **All fields** | **86/88 (98%) → 88/88 (100%)** | **76/88 (86%) → 81/88 (92%)** |
+| The two receipts alone | 20/22 → 22/22 | 16/22 → 21/22 |
+
+The receipt-only row was re-run separately and moves by exactly as much as the
+full run, so the difference is the QR's and not run-to-run noise.
+
+* **Text path:** the model already reads the QR's five fields correctly off
+  these clean synthetic pages. What it cannot read is a subtotal that is not
+  printed: it returns null on both receipts. The QR's total and VAT fill it.
+* **Vision path:** the model misread both receipts' totals, one seller name,
+  and so both subtotals; the QR corrects all five. What is left on the receipts
+  is a buyer name invented for a receipt that has no buyer — the QR carries no
+  buyer, so it cannot help there.
+* **These are synthetic pages** with crisp, generated QR codes. A printed and
+  re-scanned QR is harder to decode, and none has been measured here. When the
+  QR cannot be read the pipeline simply falls back to the model's reading.
+
+**And on the real invoice.** The contractor invoice in the table above is a
+B2B tax invoice, not a receipt, but it prints a ZATCA QR too. Scored the same
+way (`scripts/eval_set.py score --mode auto --qr off|on`, 2026-09-30): QR off
+**7/9**, the same two totals-block misses as before; QR on **9/9** — the QR
+was read (the scorer reports "read on 1 of 1 document", a count and nothing
+else), and its total and VAT, with the subtotal computed from them, replace
+both misses. Run twice, identical both times. Still n = 1.
 
 ## The dashboard
 
@@ -380,8 +444,9 @@ What is built, and where it is weak. Numbers are measured on this machine.
   vision, in a 4,096-token context. One model call on the demo invoice took
   **164.9 s**. The only real-invoice accuracy figures are the n = 1
   [Results](#results) above. Step Zero sidesteps the model entirely for
-  compliant invoices, which is the design's answer to this, but a supplier
-  without embedded XML gets a small model's reading.
+  compliant invoices, and the ZATCA QR on a simplified receipt settles five of
+  its fields without it, which is the design's answer to this; but a supplier
+  without embedded XML still gets a small model's reading of everything else.
 * **Arabic PDF text layers are fragile.** A text layer is whatever the
   producer wrote, and producers disagree. On real and generated invoices this
   project has met Arabic words stored in reverse order, MuPDF's own tokenizer
@@ -399,11 +464,6 @@ What is built, and where it is weak. Numbers are measured on this machine.
   with the one tax-invoice schema in one prompt, so which total comes back
   depends on which page the model weighs more. It picked the right one; nothing
   guarantees that, and the reviewer is not told a second document was there.
-* **A correction clears an XML-versus-model disagreement.** When a signed
-  invoice's XML and the model's reading differ, that finding needs the model's
-  reading, which is not stored — so re-checking after any edit cannot recompute
-  it, and drops it rather than leave a finding no edit could ever clear. Other
-  findings are recomputed on every edit, unreadable-page ones included.
 * **A reviewer's delete does not take.** A delete stores "no final value",
   which the app also uses to mean "never edited", so the extracted value comes
   back. Found by reading the code.

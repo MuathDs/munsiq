@@ -1,4 +1,4 @@
-"""Generate six varied test invoices for manual upload testing.
+"""Generate eight varied test invoices for manual upload testing.
 
     backend/.venv/Scripts/python.exe -m scripts.make_test_invoices
 
@@ -6,7 +6,8 @@ Writes to samples/test/ (git-ignored) and DOES NOT PROCESS THEM. Nothing here
 touches the database, storage or the model: upload the files through the UI and
 watch what happens. What each one should do is printed at the end, and it is
 computed, not guessed — the script dry-runs the deterministic stages (Step Zero,
-text-layer reading, grounding, the rules engine) on the files it just wrote.
+text-layer reading, the ZATCA QR reader, grounding, the rules engine) on the
+files it just wrote.
 
   1  UBL, English      compliant; the model is never called
   2  UBL, Arabic       compliant; Arabic page, Arabic names in the signed XML
@@ -14,6 +15,9 @@ text-layer reading, grounding, the rules engine) on the files it just wrote.
   4  digital, Arabic   no attachment; the model reads an Arabic invoice
   5  arithmetic error  no attachment; the printed VAT is not 15% of the subtotal
   6  invalid TRN       no attachment; the seller's VAT number fails the format check
+  7  receipt, English  simplified, tax-inclusive: no subtotal or buyer printed, and
+                       a ZATCA QR printed as an image carries five of the fields
+  8  receipt, Arabic   the same, Arabic-primary
 
 CAVEAT, inherited from tests/fixtures.py: the UBL is ZATCA-*shaped* and built with
 the same library that reads it back. It proves this codebase is self-consistent,
@@ -43,8 +47,10 @@ from pypdf import PdfReader, PdfWriter
 
 from app.services.extraction.grounding import ground_value
 from app.services.extraction.prompts import parse_schema
+from app.services.extraction.qr_values import apply_deterministic_sources
 from app.services.extraction.runner import ExtractedValue
 from app.services.pagetext import extract_page_text
+from app.services.qr import find_zatca_qr
 from app.services.ubl import extract_embedded_xml, parse_ubl_invoice, validate_trn
 from app.services.validation import run_rules
 from app.services.validation.context import build_context
@@ -95,6 +101,9 @@ class Invoice:
     po_number: str | None = None
     # What the page PRINTS for VAT, when it is deliberately wrong.
     printed_vat: Decimal | None = None
+    # A simplified (B2C) receipt: tax-inclusive prices, no subtotal and no buyer
+    # printed, and the ZATCA QR printed as an image — the case QR reading is for.
+    receipt: bool = False
 
     @property
     def subtotal(self) -> Decimal:
@@ -212,6 +221,39 @@ INVOICES: tuple[Invoice, ...] = (
             Line("Cable gland M32", 40, d("15.00")),
         ),
     ),
+    # Line amounts are chosen so each line's 15% is exact to the halala: the
+    # printed VAT-inclusive lines then add up to the printed total exactly.
+    Invoice(
+        filename="07_receipt_english_qr.pdf",
+        kind="simplified receipt · English · QR",
+        number="RC-2026-0588",
+        date="2026-04-20",
+        seller="Khobar Coffee Roasters Est.",
+        seller_trn="300876543210003",
+        buyer="",
+        buyer_trn="",
+        lines=(
+            Line("Espresso beans 1 kg", 2, d("95.00")),
+            Line("Paper filters (pack)", 3, d("12.00")),
+        ),
+        receipt=True,
+    ),
+    Invoice(
+        filename="08_receipt_arabic_qr.pdf",
+        kind="simplified receipt · Arabic · QR",
+        number="BK-2026-1175",
+        date="2026-04-22",
+        seller="مخبز الأصالة الحديث",
+        seller_trn="300998877610003",
+        buyer="",
+        buyer_trn="",
+        lines=(
+            Line("خبز بر", 10, d("4.00")),
+            Line("كعك بالتمر", 6, d("8.00")),
+        ),
+        arabic=True,
+        receipt=True,
+    ),
 )
 
 
@@ -223,8 +265,10 @@ def money(value: Decimal) -> str:
 # --------------------------------------------------------------------------- #
 # The signed UBL attachment (ZATCA-shaped)
 # --------------------------------------------------------------------------- #
-def build_ubl(inv: Invoice) -> bytes:
-    qr = base64.b64encode(
+def zatca_qr_payload(inv: Invoice) -> str:
+    """The base64 TLV a ZATCA QR carries: tags 1-5 from the invoice itself, plus
+    placeholders shaped like the Phase 2 cryptographic tags (never verified)."""
+    return base64.b64encode(
         build_tlv(
             {
                 1: inv.seller.encode("utf-8"),
@@ -232,7 +276,6 @@ def build_ubl(inv: Invoice) -> bytes:
                 3: f"{inv.date}T09:20:00Z".encode(),
                 4: f"{inv.total:.2f}".encode(),
                 5: f"{inv.vat:.2f}".encode(),
-                # Placeholders shaped like the Phase 2 cryptographic tags. Never verified.
                 6: bytes(range(32)),
                 7: bytes(range(64)),
                 8: bytes(range(77)),
@@ -240,6 +283,29 @@ def build_ubl(inv: Invoice) -> bytes:
             }
         )
     ).decode("ascii")
+
+
+def qr_png(text: str, *, module_px: int = 8) -> bytes:
+    """The QR drawn by OpenCV's own encoder (installed with RapidOCR), with the
+    four-module quiet zone a scanner expects."""
+    import cv2
+
+    matrix = cv2.QRCodeEncoder.create().encode(text)
+    image = cv2.resize(matrix, None, fx=module_px, fy=module_px, interpolation=cv2.INTER_NEAREST)
+    quiet = 4 * module_px
+    image = cv2.copyMakeBorder(image, quiet, quiet, quiet, quiet, cv2.BORDER_CONSTANT, value=255)
+    ok, png = cv2.imencode(".png", image)
+    if not ok:
+        raise SystemExit("OpenCV could not encode the QR image")
+    return bytes(png.tobytes())
+
+
+def incl_vat(amount: Decimal) -> Decimal:
+    return (amount * (1 + VAT_RATE)).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def build_ubl(inv: Invoice) -> bytes:
+    qr = zatca_qr_payload(inv)
 
     lines = "".join(
         f"""
@@ -331,7 +397,7 @@ def render_english(inv: Invoice) -> bytes:
         origin = x - font.text_length(text, fontsize=size) if right else x
         page.insert_text((origin, y), text, fontsize=size, fontname="ar", fontfile=str(LATIN_FONT))
 
-    put(60, 84, "TAX INVOICE", 20)
+    put(60, 84, "SIMPLIFIED TAX INVOICE" if inv.receipt else "TAX INVOICE", 20)
     put(60, 116, f"Invoice No: {inv.number}")
     put(60, 133, f"Issue Date: {inv.date}")
     if inv.po_number:
@@ -339,8 +405,13 @@ def render_english(inv: Invoice) -> bytes:
 
     put(60, 186, f"Seller: {inv.seller}")
     put(60, 203, f"VAT No: {inv.seller_trn}")
-    put(60, 232, f"Buyer: {inv.buyer}")
-    put(60, 249, f"VAT No: {inv.buyer_trn}")
+    if not inv.receipt:
+        put(60, 232, f"Buyer: {inv.buyer}")
+        put(60, 249, f"VAT No: {inv.buyer_trn}")
+
+    def price(amount: Decimal) -> Decimal:
+        """A receipt's prices are tax-inclusive, as a shop prints them."""
+        return incl_vat(amount) if inv.receipt else amount
 
     y = 292
     put(60, y, "Description", 10)
@@ -352,17 +423,25 @@ def render_english(inv: Invoice) -> bytes:
     for line in inv.lines:
         put(60, y, line.description)
         put(340, y, str(line.quantity), right=True)
-        put(430, y, money(line.unit_price), right=True)
-        put(535, y, money(line.amount), right=True)
+        put(430, y, money(price(line.unit_price)), right=True)
+        put(535, y, money(price(line.amount)), right=True)
         y += 20
 
     y += 18
-    put(430, y, "Subtotal (excl. VAT):", 11, right=True)
-    put(535, y, money(inv.subtotal), right=True)
-    put(430, y + 20, "VAT 15%:", 11, right=True)
-    put(535, y + 20, money(inv.vat), right=True)
-    put(430, y + 44, "Total (incl. VAT):", 13, right=True)
-    put(535, y + 44, f"{money(inv.total)} SAR", 13, right=True)
+    if inv.receipt:
+        # No subtotal on a tax-inclusive receipt: only the VAT inside the total.
+        put(430, y, "VAT 15% (included):", 11, right=True)
+        put(535, y, money(inv.vat), right=True)
+        put(430, y + 24, "Total (incl. VAT):", 13, right=True)
+        put(535, y + 24, f"{money(inv.total)} SAR", 13, right=True)
+        page.insert_image(pymupdf.Rect(430, 50, 545, 165), stream=qr_png(zatca_qr_payload(inv)))
+    else:
+        put(430, y, "Subtotal (excl. VAT):", 11, right=True)
+        put(535, y, money(inv.subtotal), right=True)
+        put(430, y + 20, "VAT 15%:", 11, right=True)
+        put(535, y + 20, money(inv.vat), right=True)
+        put(430, y + 44, "Total (incl. VAT):", 13, right=True)
+        put(535, y + 44, f"{money(inv.total)} SAR", 13, right=True)
 
     buffer = io.BytesIO()
     doc.save(buffer)
@@ -377,27 +456,40 @@ def render_arabic(inv: Invoice) -> bytes:
     presentation forms with non-breaking spaces — what real Arabic PDFs contain
     and what naive extraction chokes on. The pipeline normalizes them back.
     """
+    def price(amount: Decimal) -> Decimal:
+        return incl_vat(amount) if inv.receipt else amount
+
     rows = "".join(
         f"<tr><td>{line.description}</td><td class='n'>{line.quantity}</td>"
-        f"<td class='n'>{money(line.unit_price)}</td><td class='n'>{money(line.amount)}</td></tr>"
+        f"<td class='n'>{money(price(line.unit_price))}</td>"
+        f"<td class='n'>{money(price(line.amount))}</td></tr>"
         for line in inv.lines
     )
     po = f"<p>رقم أمر الشراء: {inv.po_number}</p>" if inv.po_number else ""
+    buyer = (
+        ""
+        if inv.receipt
+        else f"<p>المشتري: {inv.buyer}</p>\n<p>الرقم الضريبي للمشتري: {inv.buyer_trn}</p>"
+    )
+    totals = (
+        f"<p>ضريبة القيمة المضافة 15% (مشمولة): {money(inv.vat)}</p>"
+        if inv.receipt
+        else f"<p>المجموع قبل الضريبة: {money(inv.subtotal)}</p>\n"
+        f"<p>ضريبة القيمة المضافة 15%: {money(inv.vat)}</p>"
+    )
     html = f"""<body>
-<h2>فاتورة ضريبية</h2>
+<h2>{"فاتورة ضريبية مبسطة" if inv.receipt else "فاتورة ضريبية"}</h2>
 <p>رقم الفاتورة: {inv.number}</p>
 <p>تاريخ الإصدار: {inv.date}</p>
 {po}
 <p>البائع: {inv.seller}</p>
 <p>الرقم الضريبي للبائع: {inv.seller_trn}</p>
-<p>المشتري: {inv.buyer}</p>
-<p>الرقم الضريبي للمشتري: {inv.buyer_trn}</p>
+{buyer}
 <table>
 <tr><th>البيان</th><th>الكمية</th><th>سعر الوحدة</th><th>المبلغ</th></tr>
 {rows}
 </table>
-<p>المجموع قبل الضريبة: {money(inv.subtotal)}</p>
-<p>ضريبة القيمة المضافة 15%: {money(inv.vat)}</p>
+{totals}
 <p><b>الإجمالي شامل الضريبة: {money(inv.total)} ريال</b></p>
 </body>"""
     css = f"""
@@ -417,6 +509,9 @@ th {{ font-size: 10pt; }}
     )
     if spare < 0:
         raise SystemExit(f"{inv.filename}: the Arabic layout did not fit on the page")
+    if inv.receipt:
+        # Bottom left: the right-aligned text never reaches this corner.
+        page.insert_image(pymupdf.Rect(60, 650, 175, 765), stream=qr_png(zatca_qr_payload(inv)))
     buffer = io.BytesIO()
     doc.save(buffer)
     doc.close()
@@ -448,8 +543,9 @@ def expected_values(inv: Invoice) -> dict[str, str | None]:
         "issue_date": inv.date,
         "seller_name": inv.seller,
         "seller_trn": inv.seller_trn,
-        "buyer_name": inv.buyer,
-        "buyer_trn": inv.buyer_trn,
+        # A B2C receipt names no buyer: the right answer is null, not "".
+        "buyer_name": inv.buyer or None,
+        "buyer_trn": inv.buyer_trn or None,
         "subtotal": f"{inv.subtotal:.2f}",
         "vat_amount": f"{inv.vat:.2f}",
         "total_amount": f"{inv.total:.2f}",
@@ -485,8 +581,15 @@ def predict(inv: Invoice, pdf: bytes) -> Prediction:
     else:
         # What the page prints. A prediction, ASSUMING the model reads it correctly.
         values = {k: v for k, v in expected_values(inv).items() if v is not None}
+        if inv.receipt:
+            values.pop("subtotal")  # not printed on a tax-inclusive receipt
         source = "vlm"
-        note = "No attachment: the model runs. Rules predicted from the printed values."
+        note = (
+            "No attachment: the ZATCA QR printed on the page supplies seller, VAT number, "
+            "date, total and VAT; the subtotal follows as total - VAT; the model reads the rest."
+            if inv.receipt
+            else "No attachment: the model runs. Rules predicted from the printed values."
+        )
 
     extracted = [
         ExtractedValue(
@@ -498,6 +601,13 @@ def predict(inv: Invoice, pdf: bytes) -> Prediction:
         )
         for spec in fields
     ]
+    if not inv.embed_ubl:
+        # The pipeline's own deterministic step, with the REAL QR reader run on
+        # the PDF just written — so a receipt whose QR does not read back fails here.
+        qr = find_zatca_qr(pdf) if inv.receipt else None
+        if inv.receipt and qr is None:
+            raise SystemExit(f"{inv.filename}: the printed ZATCA QR could not be read back")
+        apply_deterministic_sources(extracted, qr=qr, pages=pages)
     context = build_context(values=extracted, fields=fields, pages=pages, invoice=ubl_invoice)
     report = run_rules(context)
 
@@ -524,6 +634,8 @@ def generate(out_dir: Path) -> list[tuple[Invoice, bytes, Prediction]]:
         raise SystemExit(f"{LATIN_FONT} not found: this script needs Arial (Arabic glyphs).")
     for inv in INVOICES:
         for trn in (inv.seller_trn, inv.buyer_trn):
+            if not trn:
+                continue  # a receipt's absent buyer
             expected_valid = trn != INVALID_TRN
             if validate_trn(trn) != expected_valid:
                 verdict = "valid" if expected_valid else "invalid"

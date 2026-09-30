@@ -1,15 +1,21 @@
-"""Benchmark the extraction model against the six generated test invoices.
+"""Benchmark the extraction model against the generated test invoices.
 
     backend/.venv/Scripts/python.exe -m scripts.make_test_invoices      # once
     backend/.venv/Scripts/python.exe -m scripts.benchmark --label before
     backend/.venv/Scripts/python.exe -m scripts.benchmark --label after
     backend/.venv/Scripts/python.exe -m scripts.benchmark --compare before after
+    backend/.venv/Scripts/python.exe -m scripts.benchmark --label qr-on --qr on
 
 Every PDF is read by the MODEL, including the two that carry a signed UBL (the
 pipeline would skip the model for those; here the point is to measure it). Expected
 values come from ``samples/test/expected.json``, written by make_test_invoices from
 the same numbers that draw each page, so the truth is exact. Both files are
 git-ignored and invented.
+
+After the model, the same deterministic step the pipeline runs is applied
+(``apply_deterministic_sources``): a copied receipt subtotal is derived, and with
+``--qr on`` the ZATCA QR is read off the page and its five fields replace the
+model's. ``--qr off`` (the default) is the pipeline with QR_READING=False.
 
 What is counted, per field:
 
@@ -42,10 +48,12 @@ import pymupdf
 from app.config import get_settings
 from app.services.extraction.client import OllamaClient
 from app.services.extraction.prompts import parse_schema
+from app.services.extraction.qr_values import apply_deterministic_sources
 from app.services.extraction.routing import ExtractionMode, resolve_mode
 from app.services.extraction.runner import ExtractedValue, run_extraction
 from app.services.normalize import normalize_for_match, normalize_text
 from app.services.pagetext import extract_page_text
+from app.services.qr import find_zatca_qr
 from app.services.raster import rasterize_pages
 from scripts.seed_demo import INVOICE_SCHEMA
 
@@ -174,7 +182,12 @@ class Report:
 
 
 def run(
-    label: str, directory: Path, only: list[str] | None, mode: ExtractionMode = "text"
+    label: str,
+    directory: Path,
+    only: list[str] | None,
+    mode: ExtractionMode = "text",
+    *,
+    qr: bool = False,
 ) -> Report:
     """``mode`` mirrors ``EXTRACTION_MODE``: 'text' (the historical default here —
     every document read as text, UBL and vision both ignored, so old benchmark
@@ -224,6 +237,8 @@ def run(
             page_images=page_images,
             vision_page_numbers=vision_pages,
         )
+        zatca_qr = find_zatca_qr(pdf_bytes) if qr else None
+        apply_deterministic_sources(result.values, qr=zatca_qr, pages=pages)
         by_key = {v.field_key: v for v in result.values if v.row_index is None}
         doc_path = "vision" if vision_pages else "text"
         for spec in fields:
@@ -237,7 +252,11 @@ def run(
         report.documents += 1
         elapsed = time.monotonic() - started
         report.seconds += elapsed
-        print(f"  {name:34} {elapsed:5.1f}s  producer={producer!r} path={doc_path}", flush=True)
+        print(
+            f"  {name:34} {elapsed:5.1f}s  producer={producer!r} path={doc_path}"
+            f"{'  qr=found' if zatca_qr else ''}",
+            flush=True,
+        )
     return report
 
 
@@ -328,14 +347,23 @@ def main() -> int:
         default="text",
         help="forced EXTRACTION_MODE for this run (default: text, the historical behaviour)",
     )
+    parser.add_argument(
+        "--qr",
+        choices=("on", "off"),
+        default="off",
+        help="read the ZATCA QR off the page after the model, as QR_READING does (default: off)",
+    )
     args = parser.parse_args()
 
     if args.compare:
         print(compare(load(args.compare[0], args.dir), load(args.compare[1], args.dir)))
         return 0
 
-    print(f"benchmark '{args.label}' [mode={args.mode}] — model reads every invoice, UBL ignored")
-    report = run(args.label, args.dir, args.only, mode=args.mode)
+    print(
+        f"benchmark '{args.label}' [mode={args.mode}, qr={args.qr}]"
+        " — model reads every invoice, UBL ignored"
+    )
+    report = run(args.label, args.dir, args.only, mode=args.mode, qr=args.qr == "on")
     (args.dir / f"benchmark-{args.label}.json").write_text(
         json.dumps(
             {

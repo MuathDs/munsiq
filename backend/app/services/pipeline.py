@@ -35,10 +35,11 @@ from app.services import storage as storage_mod
 from app.services.extraction.client import OllamaClient
 from app.services.extraction.grounding import ground_value
 from app.services.extraction.prompts import parse_line_item_schema, parse_schema
+from app.services.extraction.qr_values import apply_deterministic_sources
 from app.services.extraction.routing import resolve_mode
 from app.services.extraction.runner import ExtractedValue, ExtractionResult, run_extraction
-from app.services.extraction.totals import derive_tax_exclusive_subtotal
 from app.services.pagetext import PageText, extract_page_text
+from app.services.qr import find_zatca_qr
 from app.services.raster import TooManyPagesError, rasterize, rasterize_pages
 from app.services.ubl import (
     MalformedPDFError,
@@ -285,9 +286,11 @@ async def _process(
     outcome.model_called = result.model_called
     outcome.field_count = len(result.values)
 
-    # A tax-inclusive receipt prints no subtotal and the model copies the total
-    # into it; repaired here deterministically, not left to the prompt.
-    derive_tax_exclusive_subtotal(result.values)
+    # Deterministic sources after the model, decided without it: the ZATCA QR
+    # printed on the page (when there is no signed XML), then a subtotal the
+    # model copied from the total on a tax-inclusive receipt.
+    zatca_qr = find_zatca_qr(pdf_bytes) if settings.QR_READING and not ubl_values else None
+    apply_deterministic_sources(result.values, qr=zatca_qr, pages=pages)
 
     # ---------------------------------------------------------------- #
     # 4b. Deterministic validation — runs before the annotation reaches
@@ -396,8 +399,9 @@ async def _process(
             await session.execute(
                 sql(
                     "INSERT INTO extracted_fields (org_id, annotation_id, field_key, "
-                    "row_index, value_extracted, confidence, source, validation_state, bbox) "
-                    "VALUES (:org, :ann, :key, :row, :val, :conf, :src, :state, "
+                    "row_index, value_extracted, model_value, confidence, source, "
+                    "validation_state, bbox) "
+                    "VALUES (:org, :ann, :key, :row, :val, :model, :conf, :src, :state, "
                     "CAST(:bbox AS jsonb)) "
                     "ON CONFLICT (annotation_id, field_key, row_index) DO NOTHING"
                 ),
@@ -408,6 +412,9 @@ async def _process(
                     "row": value.row_index,
                     # NULL values are written on purpose — negative examples.
                     "val": value.value,
+                    # The model's reading of a field signed XML or the QR owns, so
+                    # the disagreement rules can be recomputed on revalidation.
+                    "model": value.shadow_value,
                     "conf": value.confidence,
                     "src": value.source,
                     "state": value.validation_state,
@@ -450,36 +457,16 @@ async def _load_schema(session, queue_id) -> tuple[uuid.UUID | None, dict[str, A
 
 
 async def _record_findings(session, org_id, annotation_id, result) -> None:  # type: ignore[no-untyped-def]
-    """Write the findings only the model run can produce: UBL/model disagreements
-    and a prompt-injection report. Revalidation cannot recompute either (the
-    model's readings are not stored), so it preserves or re-derives around them.
-    Page-level findings are part of the rule report — see validation/page_findings.
-    """
-    for mismatch in result.mismatches:
-        await session.execute(
-            sql(
-                "INSERT INTO validation_results (org_id, annotation_id, rule_code, severity, "
-                "message_ar, message_en, field_key, passed) "
-                "VALUES (:org, :ann, 'XML_PDF_MISMATCH', 'error', :ar, :en, :key, false)"
-            ),
-            {
-                "org": org_id,
-                "ann": annotation_id,
-                "key": mismatch["field_key"],
-                "ar": (
-                    f"تعارض في الحقل {mismatch['field_key']}: "
-                    f"قيمة XML الموقّعة «{mismatch['ubl_value']}» "
-                    f"بينما استخرج النموذج «{mismatch['model_value']}». "
-                    f"القيمة المعتمدة هي قيمة XML."
-                ),
-                "en": (
-                    f"Field {mismatch['field_key']} disagrees: signed XML says "
-                    f"'{mismatch['ubl_value']}', model read '{mismatch['model_value']}'. "
-                    f"The XML value is authoritative."
-                ),
-            },
-        )
+    """Write the one finding only the model run can produce: its report of
+    instruction-like text in the document. Revalidation preserves it.
 
+    Signed-XML and QR disagreements are NOT written here: the registry rules
+    (XML_PDF_MISMATCH, QR_MODEL_MISMATCH) produce them from the model's reading,
+    which is persisted as `model_value` so revalidation recomputes them too.
+    This used to also insert XML_PDF_MISMATCH rows from the runner's list,
+    duplicating the rule's. Page-level findings are part of the rule report —
+    see validation/page_findings.
+    """
     if result.suspicious_content:
         await session.execute(
             sql(

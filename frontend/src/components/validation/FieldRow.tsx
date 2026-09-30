@@ -49,6 +49,7 @@ interface Props {
 /** The inline-start bar carries provenance, so the colour reads down the list. */
 const BAR: Record<ProvenanceKind, string> = {
   verified: "bg-success",
+  qr: "bg-success/70",
   extracted: "bg-warning",
   mismatch: "bg-danger",
   human: "bg-accent-strong",
@@ -85,6 +86,9 @@ export function FieldRow({
   }, [focused]);
 
   const mismatch = findings.find((f) => f.rule_code === "XML_PDF_MISMATCH" && !f.passed);
+  // A QR disagreement is a warning, not a conflict: the badge stays "From QR",
+  // but both readings are still shown so the reviewer can see what differed.
+  const qrMismatch = findings.find((f) => f.rule_code === "QR_MODEL_MISMATCH" && !f.passed);
   const kind = provenanceOf(field.source, Boolean(mismatch));
   const readOnly = kind === "verified" && !unlocked;
   const blocking = field.validation_state === "blocking";
@@ -169,6 +173,13 @@ export function FieldRow({
           xmlValue={field.value_extracted}
           modelValue={extractModelValue(mismatch)}
           t={t}
+        />
+      ) : qrMismatch ? (
+        <MismatchComparison
+          xmlValue={field.value_extracted}
+          modelValue={extractModelValue(qrMismatch)}
+          t={t}
+          authority="qr"
         />
       ) : null}
 

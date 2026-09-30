@@ -165,6 +165,7 @@ export function FieldPane({
 
 const SUMMARY_ORDER: ProvenanceKind[] = [
   "verified",
+  "qr",
   "extracted",
   "human",
   "derived",
@@ -174,6 +175,7 @@ const SUMMARY_ORDER: ProvenanceKind[] = [
 
 const SEGMENT: Record<ProvenanceKind, string> = {
   verified: "bg-success",
+  qr: "bg-success/70",
   extracted: "bg-warning",
   human: "bg-accent-strong",
   derived: "bg-ink-soft",
@@ -197,6 +199,7 @@ function PaneHeader({
 }) {
   const counts: Record<ProvenanceKind, number> = {
     verified: 0,
+    qr: 0,
     extracted: 0,
     human: 0,
     derived: 0,

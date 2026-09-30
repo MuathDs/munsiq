@@ -49,6 +49,10 @@ const en = {
     verified: "Verified (XML)",
     verifiedTooltip:
       "Read directly from the UBL attachment the supplier cryptographically signed and filed with ZATCA. Not a model reading — this value is authoritative.",
+    qr: "From QR",
+    qrTooltip:
+      "Decoded from the ZATCA QR code printed on the invoice, without a model. The model cannot override it; if its reading differs, a warning shows both.",
+    qrCode: "ZATCA QR",
     extracted: "Extracted (AI)",
     extractedTooltip:
       "Read from the page by the extraction model. Advisory: check it against the highlighted region before confirming.",
@@ -338,6 +342,10 @@ const ar: Messages = {
     verified: "موثّق (XML)",
     verifiedTooltip:
       "مقروء مباشرةً من ملف UBL المرفق الذي وقّعه المورّد رقمياً وأرسله إلى هيئة الزكاة والضريبة والجمارك. ليست قراءة نموذج — هذه القيمة معتمدة.",
+    qr: "من رمز QR",
+    qrTooltip:
+      "مقروء من رمز QR الخاص بهيئة الزكاة والضريبة والجمارك المطبوع على الفاتورة، دون أي نموذج. لا يمكن للنموذج تجاوزه؛ وإن اختلفت قراءته يظهر تنبيه يعرض القيمتين.",
+    qrCode: "رمز QR",
     extracted: "مستخرج (AI)",
     extractedTooltip:
       "استخرجه النموذج من صورة المستند. قيمة استرشادية: تحقّق منها في المنطقة المظللة قبل الاعتماد.",

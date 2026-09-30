@@ -18,8 +18,10 @@ Contract for a rule:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Final
@@ -43,6 +45,9 @@ NUMERIC_TYPES: Final[frozenset[str]] = frozenset({"decimal", "number", "integer"
 
 COMPUTED: Final[str] = "computed"
 """Provenance of a value derived from other fields, not read from the page."""
+
+QR: Final[str] = "qr"
+"""Provenance of a value decoded from the ZATCA QR printed on the page."""
 
 CREDIT_NOTE_TYPE_CODE: Final[str] = "381"
 DEBIT_NOTE_TYPE_CODE: Final[str] = "383"
@@ -103,6 +108,11 @@ class FieldView:
         """Derived from other fields (a subtotal as total - VAT), so by
         construction not printed on the page."""
         return self.source == COMPUTED
+
+    @property
+    def from_qr(self) -> bool:
+        """Decoded from the ZATCA QR: authoritative like the signed XML."""
+        return self.source == QR
 
 
 @dataclass(frozen=True)
@@ -202,6 +212,29 @@ def money(value: Decimal) -> Decimal:
 
 def close_enough(left: Decimal, right: Decimal, tolerance: Decimal = TOLERANCE) -> bool:
     return abs(money(left) - money(right)) <= tolerance
+
+
+_ISO_DATE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
+_DAY_FIRST_DATE = re.compile(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})")
+
+
+def to_date(raw: str | None) -> date | None:
+    """A date as invoices print it: ISO (2026-02-10, or the date part of a
+    timestamp such as a ZATCA QR's) or day first (10/02/2026, 10-02-2026).
+    Arabic-Indic digits are folded first. None when it is not a real date."""
+    if raw is None:
+        return None
+    text = normalize_text(raw)
+    if match := _ISO_DATE.search(text):
+        year, month, day = match.groups()
+    elif match := _DAY_FIRST_DATE.search(text):
+        day, month, year = match.groups()
+    else:
+        return None
+    try:
+        return date(int(year), int(month), int(day))
+    except ValueError:
+        return None
 
 
 def same_value(left: str, right: str, *, numeric: bool) -> bool:

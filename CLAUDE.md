@@ -71,21 +71,6 @@ splits a file into documents (see "A PDF can hold more than one document", below
   classification each kind would get its own schema, and a summary would not be
   asked for a TRN it cannot have.
 
-- **ZATCA QR as a "Step Zero" for simplified (B2C) invoices.** Not built; recorded
-  because it is the obvious next thing. A B2C simplified invoice has no UBL
-  attachment, so Step Zero finds nothing and the model runs — but the invoice must
-  still carry the mandatory ZATCA TLV QR, printed as an IMAGE. Decoding it gives
-  seller name, TRN, timestamp, total and VAT total (tags 1-5) without the model,
-  the same way the embedded UBL does for B2B. Seen on the first real invoice (a
-  marketplace B2C receipt, 2026-09-21).
-
-  What already exists: `decode_zatca_qr` in `app/services/ubl.py` parses the TLV,
-  and `rules/zatca.py` already cross-checks tags 4 and 5 against the fields. What
-  is missing is only getting the payload out of the page image, which needs a QR
-  decoder that loads under this machine's WDAC policy (check before choosing one:
-  it is the same constraint that shaped the OCR choice). Until then a simplified
-  invoice is read by the model and the QR is not used as evidence.
-
 - **Arabic OCR for image-only pages.** The OCR engine that loads under this
   machine's WDAC policy (RapidOCR) has zero Arabic characters in its recogniser,
   so image-only Arabic scans cannot be read. This is NOT silent: the page row
@@ -348,10 +333,10 @@ FIXED, and worth remembering why:
   findings, and codes nothing emits any more (`TRN_CHECKSUM`) — and keeps
   `PRESERVED_CODES` (`SUSPICIOUS_DOCUMENT_CONTENT`, `PIPELINE_FAILED`), which
   need the model's output. `by_reviewer=False` is a system refresh that does
-  not mark an annotation human-touched. STILL a gap: `XML_PDF_MISMATCH`
-  needs the model's reading beside the signed value, which is not persisted,
-  so a revalidation cannot re-check it and clears it rather than keep an
-  unclearable row. `tests/test_page_findings.py`,
+  not mark an annotation human-touched. The one gap this left —
+  `XML_PDF_MISMATCH` could not be re-checked because the model's reading was
+  not persisted — is closed by `extracted_fields.model_value` (entry below).
+  `tests/test_page_findings.py`,
   `tests/test_workspace_api.py` (the revalidation tests).
 - **A tax-inclusive receipt's subtotal was the total, copied** (fixed
   2026-09-30). A simplified (B2C) receipt prints the total and the VAT inside
@@ -373,6 +358,47 @@ FIXED, and worth remembering why:
   gained a third, numeric chance, so "2.30" and "2.3" are one number.
   `tests/test_totals.py`,
   `test_pipeline.py::test_a_copied_receipt_total_is_stored_as_a_computed_subtotal`.
+- **The ZATCA QR on a simplified receipt was not used** (built 2026-09-30;
+  it was the deferred "QR Step Zero"). A B2C invoice has no UBL attachment but
+  must print the ZATCA TLV QR as an image. `services/qr.find_zatca_qr`
+  rasterizes each page in grey at `QR_RASTER_DPI` (300: the modules of a
+  printed QR need more pixels than the vision model's page images) and decodes
+  with OpenCV (`QRCodeDetectorAruco`, then `QRCodeDetector`, multi-code so a
+  store's loyalty-link QR beside it is skipped). OpenCV was already installed
+  as rapidocr's dependency and loads under WDAC — checked before choosing; now
+  declared directly in pyproject. A payload counts only if tags 1-5 are all
+  present and both amounts parse. The pipeline runs it only when there is no
+  UBL (`QR_READING`, default on), AFTER the model, in
+  `extraction/qr_values.apply_deterministic_sources`: the five fields (seller
+  name, seller TRN, issue date = the timestamp's date, total, VAT) get source
+  `qr`, confidence 1.0, `auto_validated` — shown as "From QR / من رمز QR". The
+  model never overrides them; its reading is kept as the field's
+  `model_value` and `QR_MODEL_MISMATCH` (WARNING — the QR stands, a reviewer
+  should look) fires when they differ, dates compared as dates and amounts as
+  Decimals. The subtotal becomes total − VAT from the QR's own numbers, source
+  `computed`, and — unlike the model-derived one — `auto_validated`, since
+  both inputs are exact. `OCR_SUBSTRING_MISSING` exempts `qr` like `ubl_xml`.
+  Signed XML still outranks the QR. Rule count 19 (10 errors, 9 warnings).
+  Alongside: the model's reading of an XML- or QR-owned field is now
+  persisted (`extracted_fields.model_value`, migration `b7c1e2d3f4a5`), so
+  both mismatch rules recompute on revalidation instead of vanishing; and the
+  pipeline's second, hand-written `XML_PDF_MISMATCH` writer is gone (it
+  duplicated every rule-engine row). `tests/test_qr.py`,
+  `test_pipeline.py::test_a_receipts_zatca_qr_supplies_five_fields_and_the_subtotal`,
+  `test_workspace_api.py::test_a_qr_disagreement_survives_revalidation`. The
+  synthetic receipts 07 and 08 in `scripts/make_test_invoices.py` carry a QR;
+  `scripts/benchmark.py --qr on|off` and `eval_set.py score --qr on|off`
+  measure it. Measured 2026-09-30, synthetic set (8 invoices, 88 fields): text
+  path 86 → 88, vision path 76 → 81; every gain on the two receipts. The real
+  contractor invoice (a B2B tax invoice) also prints a QR: auto mode 7/9 →
+  9/9, the QR read on 1 of 1 document, repeated twice. Also found: on a
+  bilingual page the QR's Arabic seller name against an English trading name
+  the model read is a translation, not a misread — `QR_MODEL_MISMATCH` does
+  not compare text in two different scripts.
+- **Inference is local again** (2026-09-30). `backend/.env` briefly pointed
+  both paths at a Colab Ollama behind a Cloudflare tunnel; that sent page text
+  and page images off this machine. Those keys are commented out and both
+  paths use `http://localhost:11434`. See the hard rule below.
 - **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
   `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
   and a fixed seed changed nothing (greedy decoding). Consecutive documents share
@@ -453,6 +479,12 @@ FIXED, and worth remembering why:
 - Model output is untrusted. Validate every field against JSON Schema + deterministic rules.
 - The UI is bilingual ar/en with full RTL. Use CSS logical properties, never left/right.
 - No secrets in code. Everything through pydantic-settings / .env.
+- Documents never leave this machine. Inference is the local Ollama; no cloud
+  API, no remote tunnel. `INFERENCE_BASE_URL` / `VISION_INFERENCE_BASE_URL`
+  stay on localhost unless the user explicitly says otherwise. KNOWN
+  EXCEPTION: `DATABASE_URL` is a hosted Supabase Postgres, which stores
+  `pages.ocr_text` and every extracted value. Files and page images stay in
+  `STORAGE_DIR`. A local Postgres closes it; nothing else would change.
 
 ## Legacy — and the one rule that survives it
 - The prototype (pandas -> Excel batch reporter, the LoRA fine-tune notebook,

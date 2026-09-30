@@ -69,7 +69,8 @@ class ExportField(BaseModel):
     source: str | None = Field(
         description=(
             "'ubl_xml' (signed attachment) | 'vlm' (model) | 'ocr_rule' | 'human' | "
-            "'computed' (derived from other fields, e.g. subtotal = total - VAT)."
+            "'computed' (derived from other fields, e.g. subtotal = total - VAT) | "
+            "'qr' (decoded from the ZATCA QR printed on the page)."
         )
     )
     confidence: Decimal | None = None

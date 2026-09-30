@@ -6,6 +6,7 @@
     backend/.venv/Scripts/python.exe -m scripts.eval_set load <org_id> <name> samples/eval/
     backend/.venv/Scripts/python.exe -m scripts.eval_set score <org_id> <name> --mode text
     backend/.venv/Scripts/python.exe -m scripts.eval_set score <org_id> <name> --mode vision
+    backend/.venv/Scripts/python.exe -m scripts.eval_set score <org_id> <name> --qr on
 
 Reuses the eval_sets / ground_truth_fields tables that already exist in the
 Phase 2 schema (app/db/models/evaluation.py) — this is the tooling that was
@@ -14,6 +15,12 @@ missing to populate them, not new storage.
 Nine fields, matching the ones the user's own manual vision test on the contractor
 invoice was scored against: invoice_number, issue_date, seller_name,
 seller_trn, buyer_name, buyer_trn, subtotal, vat_amount, total_amount.
+
+`score` applies the pipeline's deterministic step after the model (a copied
+receipt subtotal is derived; with ``--qr on`` the ZATCA QR's five fields replace
+the model's), so it scores what a reviewer would be shown. The generated test
+invoices on disk are scored the same way by scripts/benchmark.py, which takes
+the same ``--qr`` switch.
 
 `template` only prints a shape — it takes a document_id but reads nothing.
 `load` and `score` are the only commands that touch a real PDF or its fields,
@@ -43,9 +50,11 @@ from app.db.session import session_scope
 from app.services import storage as storage_mod
 from app.services.extraction.client import OllamaClient
 from app.services.extraction.prompts import parse_schema
+from app.services.extraction.qr_values import apply_deterministic_sources
 from app.services.extraction.routing import ExtractionMode, resolve_mode
 from app.services.extraction.runner import run_extraction
 from app.services.pagetext import extract_page_text
+from app.services.qr import find_zatca_qr
 from app.services.raster import rasterize_pages
 from scripts.benchmark import Report, render
 from scripts.seed_demo import INVOICE_SCHEMA
@@ -114,7 +123,9 @@ async def _load(org_id: uuid.UUID, eval_set_name: str, directory: Path) -> None:
               f"into eval set {eval_set_name!r}")
 
 
-async def _score(org_id: uuid.UUID, eval_set_name: str, mode: ExtractionMode) -> None:
+async def _score(
+    org_id: uuid.UUID, eval_set_name: str, mode: ExtractionMode, *, qr: bool = False
+) -> None:
     settings = get_settings()
     fields = parse_schema(INVOICE_SCHEMA)
     text_client = OllamaClient()
@@ -154,7 +165,8 @@ async def _score(org_id: uuid.UUID, eval_set_name: str, mode: ExtractionMode) ->
         expected_by_doc.setdefault(r.document_id, {})[r.field_key] = r.expected_value
         storage_key_by_doc[r.document_id] = r.storage_key
 
-    report = Report(label=f"{eval_set_name}-{mode}")
+    report = Report(label=f"{eval_set_name}-{mode}-qr-{'on' if qr else 'off'}")
+    qr_read = 0
     for document_id, storage_key in storage_key_by_doc.items():
         pdf_bytes = storage.get(storage_key)
         with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
@@ -184,6 +196,9 @@ async def _score(org_id: uuid.UUID, eval_set_name: str, mode: ExtractionMode) ->
             page_images=page_images,
             vision_page_numbers=vision_pages,
         )
+        zatca_qr = find_zatca_qr(pdf_bytes) if qr else None
+        apply_deterministic_sources(result.values, qr=zatca_qr, pages=pages)
+        qr_read += zatca_qr is not None
         by_key = {v.field_key: v for v in result.values if v.row_index is None}
         expected = expected_by_doc[document_id]
         doc_path = "vision" if vision_pages else "text"
@@ -195,6 +210,9 @@ async def _score(org_id: uuid.UUID, eval_set_name: str, mode: ExtractionMode) ->
         # Only the aggregate, scores-only report below is printed.
 
     print(render(report))
+    if qr:
+        # A count, never the QR's content.
+        print(f"ZATCA QR read on {qr_read} of {report.documents} document(s)")
 
 
 def main() -> int:
@@ -217,6 +235,7 @@ def main() -> int:
     p_score.add_argument("org_id")
     p_score.add_argument("eval_set_name")
     p_score.add_argument("--mode", choices=("text", "vision", "auto"), default="auto")
+    p_score.add_argument("--qr", choices=("on", "off"), default="off")
 
     args = parser.parse_args()
 
@@ -227,7 +246,9 @@ def main() -> int:
         asyncio.run(_load(uuid.UUID(args.org_id), args.eval_set_name, args.directory))
         return 0
     if args.command == "score":
-        asyncio.run(_score(uuid.UUID(args.org_id), args.eval_set_name, args.mode))
+        asyncio.run(
+            _score(uuid.UUID(args.org_id), args.eval_set_name, args.mode, qr=args.qr == "on")
+        )
         return 0
     return 1
 

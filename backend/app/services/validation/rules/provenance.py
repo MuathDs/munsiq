@@ -24,6 +24,7 @@ from app.services.validation.engine import (
     failure,
     rule,
     same_value,
+    to_date,
     to_decimal,
 )
 
@@ -75,6 +76,62 @@ def xml_and_model_agree(ctx: ValidationContext) -> list[RuleResult] | None:
     return findings
 
 
+ISSUE_DATE = "issue_date"
+
+
+@rule(
+    "QR_MODEL_MISMATCH",
+    Severity.WARNING,
+    message_ar="قيمة في رمز QR الخاص بهيئة الزكاة تختلف عمّا قرأه النموذج من الصفحة.",
+    message_en="A value in the ZATCA QR code differs from what the model read on the page.",
+)
+def qr_and_model_agree(ctx: ValidationContext) -> list[RuleResult] | None:
+    """Flag a field where the ZATCA QR and the model's reading disagree.
+
+    The QR value stands — the model never overrides it — so this is a warning,
+    not a veto: the disagreement means either the model misread the page or
+    the printed text and the QR describe different numbers, and a reviewer
+    should see which. Amounts compare as Decimals and dates as dates, so
+    52118 against 52118.00, or 10/02/2026 against a QR timestamp of the same
+    day, is agreement. Text in two different scripts is not compared: the QR
+    carries the seller's Arabic legal name, a bilingual page often prints an
+    English trading name as well, and a translation is not a misread.
+    """
+    findings: list[RuleResult] = []
+    compared = 0
+    for key, entry in ctx.fields.items():
+        if not entry.from_qr or entry.value is None or entry.shadow_value is None:
+            continue
+        compared += 1
+        if key == ISSUE_DATE:
+            qr_date, model_date = to_date(entry.value), to_date(entry.shadow_value)
+            if qr_date is not None and qr_date == model_date:
+                continue
+        else:
+            translated = has_arabic(entry.value) != has_arabic(entry.shadow_value)
+            if translated or same_value(
+                entry.value, entry.shadow_value, numeric=key in ctx.numeric_keys
+            ):
+                continue
+        findings.append(
+            failure(
+                "QR_MODEL_MISMATCH",
+                message_ar=(
+                    f"الحقل «{key}»: رمز QR يذكر «{entry.value}» بينما قرأ النموذج "
+                    f"«{entry.shadow_value}» من الصفحة. المعتمد قيمة الرمز."
+                ),
+                message_en=(
+                    f"Field '{key}': the ZATCA QR says '{entry.value}' while the model read "
+                    f"'{entry.shadow_value}' on the page. The QR value is used."
+                ),
+                field_key=key,
+            )
+        )
+    if compared == 0:
+        return None
+    return findings
+
+
 @rule(
     "OCR_SUBSTRING_MISSING",
     Severity.ERROR,
@@ -88,7 +145,7 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
     sides, so Arabic-Indic digits, thousands separators and invisible format
     characters do not cause false alarms.
 
-    THREE EXEMPTIONS, all load-bearing:
+    FOUR EXEMPTIONS, all load-bearing:
 
     * **UBL values.** They were read from a signed attachment, not the rendered
       page, and a compliant invoice can carry a value in its XML that is not
@@ -102,6 +159,8 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
     * **Computed values.** A subtotal derived as total - VAT on a tax-inclusive
       receipt is, by construction, printed nowhere; its inputs are checked here
       in its place.
+    * **QR values.** Decoded from the ZATCA QR, which is authoritative like the
+      signed XML and may format an amount differently from the printed text.
 
     A value counts as present when it appears as text, as the same digits, or
     as the same NUMBER — "2.30" against a page printing "2.3".
@@ -125,6 +184,7 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
             or entry.from_ubl
             or entry.from_human
             or entry.from_computed
+            or entry.from_qr
         ):
             continue
         needle = normalize_for_match(entry.value)

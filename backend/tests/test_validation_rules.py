@@ -11,6 +11,7 @@ passed" for a document that never had one would be a lie in the compliance panel
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -27,6 +28,7 @@ from app.services.validation.engine import (
     registry,
     run_rules,
     same_value,
+    to_date,
     to_decimal,
 )
 from app.services.validation.rules.arithmetic import (
@@ -41,6 +43,7 @@ from app.services.validation.rules.completeness import required_fields_are_prese
 from app.services.validation.rules.provenance import (
     arabic_survived_the_xml,
     numeric_values_appear_on_the_page,
+    qr_and_model_agree,
     text_layer_is_intact,
     xml_and_model_agree,
 )
@@ -730,6 +733,51 @@ def test_same_value_falls_back_to_text_for_an_amount_that_does_not_parse() -> No
     assert same_value("n/a", "none", numeric=True) is False
     assert same_value("2.3", "2.30", numeric=True) is True
     assert same_value("2.3", "2.30", numeric=False) is False
+
+
+def test_qr_values_are_exempt_from_the_page_check() -> None:
+    """Decoded from the ZATCA QR, which is authoritative like the signed XML —
+    and may legitimately format an amount differently from the printed page."""
+    context = ctx(
+        fields={"total_amount": FieldView(key="total_amount", value="17.65", source="qr")},
+        numeric_keys=frozenset({"total_amount"}),
+        page_text="Total incl. VAT SAR 17.650",
+    )
+    assert numeric_values_appear_on_the_page(context) is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2026-02-10", date(2026, 2, 10)),
+        ("2026-02-10T09:30:00Z", date(2026, 2, 10)),  # a ZATCA QR timestamp
+        ("10/02/2026", date(2026, 2, 10)),  # day first, as Saudi invoices print it
+        ("10-2-2026", date(2026, 2, 10)),
+        ("١٠/٠٢/٢٠٢٦", date(2026, 2, 10)),
+        ("2026-02-30", None),  # shaped like a date, but not one
+        ("yesterday", None),
+        (None, None),
+    ],
+)
+def test_to_date_reads_the_ways_invoices_print_a_date(raw: str | None, expected: date) -> None:
+    assert to_date(raw) == expected
+
+
+def test_a_qr_date_the_model_read_differently_is_flagged() -> None:
+    context = ctx(
+        fields={
+            "issue_date": FieldView(
+                key="issue_date", value="2026-02-10", source="qr", shadow_value="2026-02-11"
+            ),
+            "seller_trn": FieldView(
+                key="seller_trn", value="300000000000003", source="qr",
+                shadow_value="300000000000003",
+            ),
+        },
+    )
+    findings = qr_and_model_agree(context)
+    assert findings is not None
+    assert [f.field_key for f in findings] == ["issue_date"]
 
 
 def test_computed_values_are_exempt_from_the_page_check() -> None:

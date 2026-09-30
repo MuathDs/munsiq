@@ -9,6 +9,10 @@
  *   GREEN  موثّق (XML)   — read from the UBL attachment the supplier
  *                          cryptographically signed and filed with ZATCA.
  *                          Not a prediction. Read-only by default.
+ *   GREEN  من رمز QR     — decoded from the ZATCA QR a simplified invoice must
+ *                          print: seller, VAT number, date, total, VAT. Read
+ *                          deterministically, no model; the model never
+ *                          overrides it, and a disagreement is a warning.
  *   AMBER  مستخرج (AI)   — a model read it off the page. Advisory, shown with
  *                          its confidence.
  *   RED    تعارض          — the signed XML and the model disagree. The XML
@@ -24,13 +28,22 @@
  * discovered on inspection.
  */
 
-import { Bot, Calculator, CircleDashed, ShieldCheck, TriangleAlert, UserPen } from "lucide-react";
+import {
+  Bot,
+  Calculator,
+  CircleDashed,
+  QrCode,
+  ShieldCheck,
+  TriangleAlert,
+  UserPen,
+} from "lucide-react";
 
 import type { FieldSource } from "@/lib/api/types";
 import type { Messages } from "@/lib/messages";
 
 export type ProvenanceKind =
   | "verified"
+  | "qr"
   | "extracted"
   | "mismatch"
   | "human"
@@ -42,6 +55,7 @@ export function provenanceOf(source: FieldSource | null, hasMismatch: boolean): 
   // conflicting reading, which is more urgent than either alone.
   if (hasMismatch) return "mismatch";
   if (source === "ubl_xml") return "verified";
+  if (source === "qr") return "qr";
   if (source === "human") return "human";
   if (source === "vlm") return "extracted";
   if (source === "computed") return "derived";
@@ -50,6 +64,7 @@ export function provenanceOf(source: FieldSource | null, hasMismatch: boolean): 
 
 const STYLES: Record<ProvenanceKind, string> = {
   verified: "border-success/40 bg-success-soft text-success",
+  qr: "border-success/40 bg-success-soft text-success",
   extracted: "border-warning/40 bg-warning-soft text-warning",
   mismatch: "border-danger/50 bg-danger-soft text-danger",
   human: "border-accent/40 bg-accent/15 text-accent-strong",
@@ -64,6 +79,7 @@ const SIZES = {
 
 const ICONS: Record<ProvenanceKind, typeof ShieldCheck> = {
   verified: ShieldCheck,
+  qr: QrCode,
   extracted: Bot,
   mismatch: TriangleAlert,
   human: UserPen,
@@ -75,6 +91,8 @@ export function provenanceLabel(kind: ProvenanceKind, t: Messages): string {
   switch (kind) {
     case "verified":
       return t.provenance.verified;
+    case "qr":
+      return t.provenance.qr;
     case "extracted":
       return t.provenance.extracted;
     case "mismatch":
@@ -92,6 +110,8 @@ function tooltipFor(kind: ProvenanceKind, t: Messages): string {
   switch (kind) {
     case "verified":
       return t.provenance.verifiedTooltip;
+    case "qr":
+      return t.provenance.qrTooltip;
     case "extracted":
       return t.provenance.extractedTooltip;
     case "mismatch":
@@ -163,7 +183,8 @@ function ConfidenceBar({ value, t }: { value: number; t: Messages }) {
 }
 
 /**
- * Both readings, side by side, when the signed XML and the model disagree.
+ * Both readings, side by side, when the signed XML — or the ZATCA QR — and the
+ * model disagree.
  *
  * Shown rather than silently resolved: the reviewer is the one who decides
  * whether the PDF a human reads and the XML a machine files actually describe
@@ -174,17 +195,20 @@ export function MismatchComparison({
   xmlValue,
   modelValue,
   t,
+  authority = "xml",
 }: {
   xmlValue: string | null;
   modelValue: string | null;
   t: Messages;
+  authority?: "xml" | "qr";
 }) {
+  const AuthorityIcon = authority === "qr" ? QrCode : ShieldCheck;
   return (
     <div className="mt-3 grid grid-cols-2 gap-2">
       <div className="rounded-[9px] border border-success/35 bg-success-soft px-3 py-2.5">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold text-success">
-          <ShieldCheck size={12} aria-hidden />
-          {t.provenance.signedXml}
+          <AuthorityIcon size={12} aria-hidden />
+          {authority === "qr" ? t.provenance.qrCode : t.provenance.signedXml}
         </div>
         <div className="tabular mt-1 break-words font-mono text-[15px] font-semibold text-ink">
           {xmlValue ?? "—"}

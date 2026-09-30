@@ -161,6 +161,16 @@ class Settings(BaseSettings):
     # rapidfuzz score below which an extracted value counts as ungrounded.
     GROUNDING_THRESHOLD: int = 85
 
+    # Read the ZATCA QR printed on the page (app/services/qr.py) when there is no
+    # embedded XML: seller name, seller VAT number, date, total and VAT come from
+    # it deterministically and outrank the model. Local only — OpenCV, already
+    # installed with RapidOCR. Off is the control arm for measuring it.
+    QR_READING: bool = True
+    # Higher than RASTER_DPI on purpose: a receipt's QR can be ~2.5 cm across
+    # with ~80 modules, which is about 2 px per module at 150 DPI — too few to
+    # decode. 300 DPI gives ~4.
+    QR_RASTER_DPI: int = 300
+
     # ----------------------------------------------------------------- #
     # Signed page-image URLs
     # ----------------------------------------------------------------- #

@@ -8,8 +8,11 @@
  */
 
 /** Drives the provenance badge — the core visual distinction in this product. */
-/** 'computed' is derived from other fields (a subtotal as total - VAT), not read. */
-export type FieldSource = "ubl_xml" | "vlm" | "ocr_rule" | "human" | "computed";
+/**
+ * 'computed' is derived from other fields (a subtotal as total - VAT), not read.
+ * 'qr' is decoded from the ZATCA QR printed on the page, without a model.
+ */
+export type FieldSource = "ubl_xml" | "vlm" | "ocr_rule" | "human" | "computed" | "qr";
 
 export type ValidationState = "blocking" | "review_suggested" | "auto_validated";
 

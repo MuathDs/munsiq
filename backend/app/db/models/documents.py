@@ -74,6 +74,8 @@ class Page(Base, OrgScopedMixin):
     # The degraded values exist so a page that yielded NO usable text is
     # recorded as such instead of being indistinguishable from a blank page.
     text_source: Mapped[str | None] = mapped_column(Text)
+    # 'text' | 'vision' | NULL (Step Zero answered; no model call was made).
+    extraction_path: Mapped[str | None] = mapped_column(Text)
 
 
 class DocumentPart(Base, OrgScopedMixin):

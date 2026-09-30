@@ -76,6 +76,7 @@ published check-digit algorithm to verify beyond the shape. `validate_trn` in
 | Code | Severity | Check |
 | --- | --- | --- |
 | `XML_PDF_MISMATCH` | error | a field's signed XML value disagrees with the model's reading |
+| `QR_MODEL_MISMATCH` | warning | a field decoded from the ZATCA QR on the page disagrees with the model's reading |
 | `OCR_SUBSTRING_MISSING` | error | every numeric value appears in the page text |
 | `ARABIC_ENCODING_SUSPECT` | warning | PDF renders Arabic but XML party names are empty or mojibake |
 | `TEXT_LAYER_FRAGMENTED` | warning | the page's Arabic words look cut apart (many single letters, none starting with the definite article) |
@@ -91,12 +92,33 @@ returning `52118.00` is a formatting difference, not a fabrication. A third
 compares numbers as Decimals, so `2.30` against a page printing `2.3` is the
 same amount.
 
-Three sources are exempt. Values from the signed UBL were read from an
+Four sources are exempt. Values from the signed UBL were read from an
 attachment, not the rendered page, and a compliant invoice can legitimately
-carry a value in its XML that is not printed on its face. A reviewer's
-correction has authority the model does not. And a `computed` value — a
-receipt's subtotal derived as total − VAT (`extraction/totals.py`) — is printed
-nowhere by construction; its two inputs are checked here in its place.
+carry a value in its XML that is not printed on its face. Values decoded from
+the ZATCA QR (`qr`) are the same kind of authority: the QR is data the supplier
+encoded, and may format an amount differently from the printed text. A
+reviewer's correction has authority the model does not. And a `computed`
+value — a receipt's subtotal derived as total − VAT (`extraction/totals.py`,
+or from the QR's own total and VAT in `extraction/qr_values.py`) — is printed
+nowhere by construction; its two inputs are checked in its place.
+
+**The QR and the model.** On a page with no embedded XML, the pipeline decodes
+the ZATCA QR from the rendered page (`services/qr.py`, OpenCV, no model) and
+its five fields — seller name, seller VAT number, date, total, VAT — replace
+the model's reading, which is kept as `extracted_fields.model_value`.
+`QR_MODEL_MISMATCH` compares the two. It is a warning, not an error like
+`XML_PDF_MISMATCH`: the QR value is used either way, and a disagreement means
+the model misread the page or the page and the QR disagree — worth a look,
+not a reason to refuse confirmation. Dates compare as dates, so a model's
+`10/02/2026` agrees with a QR timestamp of `2026-02-10T09:30:00Z`. Text in two
+scripts is not compared at all: the QR carries the seller's Arabic legal name,
+a bilingual page often prints an English trading name too, and the model
+returning that one is a translation, not a misread.
+
+Both mismatch rules read the stored `model_value`, so they are recomputed on
+every revalidation like every other rule. (Before `model_value` was stored, a
+correction to any field dropped an XML disagreement, because there was nothing
+left to compare against.)
 
 **Amounts are compared as Decimals throughout.** Arithmetic and QR checks
 always were; `engine.same_value` now does the same for `XML_PDF_MISMATCH` and
@@ -158,23 +180,23 @@ not add up" is far less useful to a reviewer than naming both numbers:
 ## Coverage
 
 Measured 2026-09-30, `pytest --cov=app/services/validation --cov-branch` over
-`test_validation_rules.py`, `test_validation_context.py` and
-`test_page_findings.py` (138 tests):
+`test_validation_rules.py`, `test_validation_context.py`,
+`test_page_findings.py` and `test_qr.py` (165 tests):
 
 ```
 Name                                            Stmts   Miss Branch BrPart  Cover
 ---------------------------------------------------------------------------------
 app/services/validation/__init__.py                 4      0      0      0   100%
 app/services/validation/context.py                 33      0      4      0   100%
-app/services/validation/engine.py                 174      0     22      0   100%
+app/services/validation/engine.py                 196      0     28      0   100%
 app/services/validation/page_findings.py           32      0      4      0   100%
 app/services/validation/rules/__init__.py           3      0      0      0   100%
 app/services/validation/rules/arithmetic.py        93      0     46      0   100%
 app/services/validation/rules/completeness.py      13      0      6      0   100%
-app/services/validation/rules/provenance.py       102      0     50      0   100%
+app/services/validation/rules/provenance.py       122      0     62      0   100%
 app/services/validation/rules/zatca.py            105      0     54      0   100%
 ---------------------------------------------------------------------------------
-TOTAL                                             559      0    186      0   100%
+TOTAL                                             601      0    204      0   100%
 ```
 
 Statement *and* branch coverage, since a rule's value is entirely in its edge

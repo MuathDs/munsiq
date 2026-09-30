@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-FieldSource = Literal["ubl_xml", "vlm", "ocr_rule", "human", "computed"]
+FieldSource = Literal["ubl_xml", "vlm", "ocr_rule", "human", "computed", "qr"]
 CorrectionAction = Literal["edit", "delete", "add", "rebox"]
 
 
@@ -45,7 +45,9 @@ class ExtractedFieldOut(BaseModel):
             "Drives the provenance badge. 'ubl_xml' is read from the supplier's "
             "signed attachment and is authoritative; 'vlm' is a model reading and "
             "is advisory; 'human' is a reviewer correction; 'computed' is derived "
-            "from other fields (a subtotal as total - VAT), not read from the page."
+            "from other fields (a subtotal as total - VAT), not read from the page; "
+            "'qr' is decoded from the ZATCA QR printed on the page and, like the "
+            "signed XML, outranks the model."
         ),
     )
     validation_state: str | None = Field(

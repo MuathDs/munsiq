@@ -21,9 +21,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-FieldSource = Literal["ubl_xml", "vlm", "ocr_rule", "human", "computed"]
+FieldSource = Literal["ubl_xml", "vlm", "ocr_rule", "human", "computed", "qr"]
 """Where a value came from. Drives the provenance badge in the review UI.
-'computed' is derived from other fields (a subtotal as total - VAT), not read."""
+'computed' is derived from other fields (a subtotal as total - VAT), not read.
+'qr' is decoded from the ZATCA QR printed on the page."""
 
 VatCategory = Literal["S", "Z", "E", "O"]
 """ZATCA VAT category: Standard, Zero-rated, Exempt, Out-of-scope."""

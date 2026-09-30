@@ -68,6 +68,53 @@ def build_qr_base64(*, include_crypto_tags: bool = True) -> str:
     return base64.b64encode(build_tlv(values)).decode("ascii")
 
 
+def render_qr_png(text: str, *, module_px: int = 8) -> bytes:
+    """A QR code as PNG bytes, drawn by OpenCV's own encoder (already installed
+    with RapidOCR), with the four-module quiet zone scanners expect."""
+    import cv2
+
+    matrix = cv2.QRCodeEncoder.create().encode(text)
+    image = cv2.resize(matrix, None, fx=module_px, fy=module_px, interpolation=cv2.INTER_NEAREST)
+    quiet = 4 * module_px
+    image = cv2.copyMakeBorder(image, quiet, quiet, quiet, quiet, cv2.BORDER_CONSTANT, value=255)
+    ok, png = cv2.imencode(".png", image)
+    assert ok
+    return bytes(png.tobytes())
+
+
+RECEIPT_LINES: Final[tuple[str, ...]] = (
+    "SIMPLIFIED TAX INVOICE",
+    "Receipt No: RC-2026-0077",
+    "Seller: Al Jazeera Industrial Maintenance",
+    "Total incl. VAT: 52,118.00 SAR",
+    "VAT 15% (included): 6,798.00",
+)
+
+
+def build_receipt_pdf_with_qr(
+    qr_texts: tuple[str, ...] | None = None,
+    lines: tuple[str, ...] = RECEIPT_LINES,
+    font_path: str = r"C:\Windows\Fonts\arial.ttf",
+) -> bytes:
+    """A synthetic simplified (B2C) receipt: tax-inclusive, no subtotal printed,
+    and one or more QR codes printed as images — by default the ZATCA TLV QR from
+    ``build_qr_base64``. ``qr_texts=()`` prints none at all."""
+    texts = (build_qr_base64(),) if qr_texts is None else qr_texts
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    y = 100
+    for line in lines:
+        page.insert_text((60, y), line, fontsize=12, fontfile=font_path, fontname="F0")
+        y += 26
+    for index, text in enumerate(texts):
+        top = 60 + index * 170
+        page.insert_image(pymupdf.Rect(410, top, 550, top + 140), stream=render_qr_png(text))
+    buffer = BytesIO()
+    doc.save(buffer)
+    doc.close()
+    return buffer.getvalue()
+
+
 # --------------------------------------------------------------------------- #
 # UBL 2.1 XML
 # --------------------------------------------------------------------------- #

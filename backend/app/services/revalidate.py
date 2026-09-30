@@ -55,11 +55,9 @@ PRESERVED_CODES: Final[frozenset[str]] = frozenset(
 )
 """Findings revalidation cannot recompute from stored state, so it never deletes.
 
-Not in this set, on purpose: XML_PDF_MISMATCH. It needs the model's reading
-alongside the signed value, and that reading is not persisted, so a revalidation
-cannot re-check it — but keeping the row would make it unclearable by any
-correction. It is replaced like any rule (and so cleared on revalidation);
-recorded as a known gap in CLAUDE.md."""
+XML_PDF_MISMATCH and QR_MODEL_MISMATCH are not here: the model's reading of a
+field signed XML or the QR owns is persisted as `extracted_fields.model_value`,
+so both are recomputed like any rule."""
 
 
 @dataclass(frozen=True)
@@ -215,7 +213,7 @@ async def _context_from_db(
             sql(
                 # Header fields only — see build_context for why line-item
                 # cells stay out of the rules' key-addressed view.
-                "SELECT field_key, value_extracted, value_final, source "
+                "SELECT field_key, value_extracted, value_final, model_value, source "
                 "FROM extracted_fields WHERE annotation_id = :a AND row_index IS NULL"
             ),
             {"a": annotation_id},
@@ -229,7 +227,9 @@ async def _context_from_db(
             # judge what the reviewer is about to confirm, not what arrived.
             value=row.value_final if row.value_final is not None else row.value_extracted,
             source="human" if row.value_final is not None else row.source,
-            shadow_value=None,
+            # What the model read for a field signed XML or the QR owns — so the
+            # disagreement rules recompute rather than vanish on an edit.
+            shadow_value=row.model_value,
         )
         for row in field_rows
     }

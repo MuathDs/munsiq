@@ -346,6 +346,111 @@ async def test_a_copied_receipt_total_is_stored_as_a_computed_subtotal(tenant, m
     assert not failed & {"GRAND_TOTAL_MISMATCH", "VAT_CALC_MISMATCH", "OCR_SUBSTRING_MISSING"}
 
 
+QR_RECEIPT_SCHEMA = {
+    "name": "qr receipt schema",
+    "fields": [
+        {"key": "invoice_number", "type": "string", "required": True},
+        {"key": "issue_date", "type": "date", "required": True},
+        {"key": "seller_name", "type": "string", "required": True},
+        {"key": "seller_trn", "type": "string", "required": True},
+        {"key": "subtotal", "type": "decimal", "required": True},
+        {"key": "vat_amount", "type": "decimal", "required": True},
+        {"key": "total_amount", "type": "decimal", "required": True},
+    ],
+}
+
+
+class ReceiptModelClient(RecordingClient):
+    """A model reading of the QR receipt: subtotal copied, VAT digits swapped."""
+
+    def chat(self, *, system, user, images=None, json_mode=True):  # type: ignore[no-untyped-def]
+        result = super().chat(system=system, user=user, images=images, json_mode=json_mode)
+        result.content = json.dumps(
+            {
+                "invoice_number": "RC-2026-0077",
+                "issue_date": "10/02/2026",
+                "seller_name": "Al Jazeera Industrial Maintenance",
+                "seller_trn": fixtures.SELLER_TRN,
+                "subtotal": "52118.00",
+                "vat_amount": "6789.00",
+                "total_amount": "52118.00",
+            }
+        )
+        return result
+
+
+async def test_a_receipts_zatca_qr_supplies_five_fields_and_the_subtotal(  # type: ignore[no-untyped-def]
+    tenant, monkeypatch
+) -> None:
+    """The acceptance case: a synthetic receipt with a ZATCA-format QR. The five
+    QR fields come out with source 'qr' and the subtotal as 'computed' from the
+    QR's own total and VAT; the model's VAT misread is kept and flagged, and
+    never replaces the QR's value."""
+    org_id, queue_id = tenant
+    async with get_sessionmaker()() as session, session.begin():
+        await session.execute(
+            sql(
+                "INSERT INTO extraction_schemas (org_id, queue_id, version, definition) "
+                "VALUES (:o, :q, 2, CAST(:d AS jsonb))"
+            ),
+            {"o": org_id, "q": queue_id, "d": json.dumps(QR_RECEIPT_SCHEMA, ensure_ascii=False)},
+        )
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", ReceiptModelClient)
+    document_id = await _insert_document(org_id, queue_id, fixtures.build_receipt_pdf_with_qr())
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.error is None and outcome.annotation_id is not None
+    fields = await _fields(org_id, outcome.annotation_id)
+    expected = {
+        "seller_name": fixtures.SELLER_NAME,
+        "seller_trn": fixtures.SELLER_TRN,
+        "issue_date": "2026-02-10",
+        "total_amount": fixtures.QR_TOTAL_WITH_VAT,
+        "vat_amount": fixtures.QR_VAT_TOTAL,
+    }
+    for key, value in expected.items():
+        assert (fields[key]["value"], fields[key]["source"]) == (value, "qr"), key
+    assert (fields["subtotal"]["value"], fields["subtotal"]["source"]) == ("45320.00", "computed")
+    assert fields["invoice_number"]["source"] == "vlm"
+    assert outcome.blockers == []
+
+    async with get_sessionmaker()() as session, session.begin():
+        model_vat = await session.scalar(
+            sql(
+                "SELECT model_value FROM extracted_fields "
+                "WHERE annotation_id = :a AND field_key = 'vat_amount'"
+            ),
+            {"a": outcome.annotation_id},
+        )
+        warned = (
+            await session.execute(
+                sql(
+                    "SELECT field_key FROM validation_results WHERE annotation_id = :a "
+                    "AND rule_code = 'QR_MODEL_MISMATCH' AND NOT passed"
+                ),
+                {"a": outcome.annotation_id},
+            )
+        ).all()
+    assert model_vat == "6789.00", "the model's reading is persisted beside the QR value"
+    assert [w[0] for w in warned] == ["vat_amount"]
+
+
+async def test_qr_reading_can_be_switched_off(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The measurement's control arm: with QR_READING off the same receipt is
+    read by the model alone."""
+    org_id, queue_id = tenant
+    monkeypatch.setattr(get_settings(), "QR_READING", False)
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", RecordingClient)
+    document_id = await _insert_document(org_id, queue_id, fixtures.build_receipt_pdf_with_qr())
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.annotation_id is not None
+    fields = await _fields(org_id, outcome.annotation_id)
+    assert all(f["source"] != "qr" for f in fields.values())
+
+
 async def test_values_are_grounded_to_the_text_layer(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Grounding on a text-layer page comes from the PDF's own word boxes."""
     org_id, queue_id = tenant

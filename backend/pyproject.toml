@@ -32,6 +32,11 @@ dependencies = [
     # pages cannot be read and are reported as a validation finding rather than
     # returned as empty text. See docs/ingestion.md.
     "rapidocr-onnxruntime>=1.3",
+    # ZATCA QR reading (app/services/qr.py): OpenCV's QR detector and the array
+    # it reads. Both were already installed as rapidocr's own dependencies and
+    # load under the WDAC policy; declared because we now import them directly.
+    "opencv-python>=4.8",
+    "numpy>=1.26",
     # XLSX rendering of the MunsiqInvoiceV1 export (two sheets, Arabic cells).
     # Pure Python, so it loads under the WDAC policy that blocks lxml 6.
     "openpyxl>=3.1",
