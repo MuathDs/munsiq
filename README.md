@@ -98,9 +98,9 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **477 passed, 1 skipped, 1 xfailed — 24m04s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-25. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **519 passed, 1 skipped, 1 xfailed — 25m00s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-30. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **18** (10 blocking errors, 8 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-25 |
-| Validation coverage | **100% statements and branches** — 501 statements, 172 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-25; 120 tests, **2.3 s** without coverage instrumentation (the rules are pure functions) |
+| Validation coverage | **100% statements and branches** — 559 statements, 186 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-30; 138 tests, **2.4 s** without coverage instrumentation (the rules are pure functions) |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
 | Tenant isolation | **17 of 17** org-scoped tables `ENABLE` + `FORCE`; 18 policies | live query against `pg_class` / `pg_policies`, 2026-09-20 |
 | Document A, compliant | **0 model calls**; 19 fields (11 header + 8 line-item cells); 9/11 header and 5/8 line cells grounded; no blockers | queried from the database, 2026-09-20 |
@@ -399,12 +399,11 @@ What is built, and where it is weak. Numbers are measured on this machine.
   with the one tax-invoice schema in one prompt, so which total comes back
   depends on which page the model weighs more. It picked the right one; nothing
   guarantees that, and the reviewer is not told a second document was there.
-* **A reviewer's correction erases page-level findings.** Revalidation replaces
-  every finding with what the rules produce, but unreadable-page findings
-  (`OCR_SCRIPT_UNSUPPORTED` and three siblings) are written by the pipeline,
-  not by a rule, so they vanish on the first edit, blocking ones included. A
-  document blocked by an unreadable page becomes confirmable after an
-  unrelated correction. Seen on the invoice in Results; recorded, not fixed.
+* **A correction clears an XML-versus-model disagreement.** When a signed
+  invoice's XML and the model's reading differ, that finding needs the model's
+  reading, which is not stored — so re-checking after any edit cannot recompute
+  it, and drops it rather than leave a finding no edit could ever clear. Other
+  findings are recomputed on every edit, unreadable-page ones included.
 * **A reviewer's delete does not take.** A delete stores "no final value",
   which the app also uses to mean "never edited", so the extracted value comes
   back. Found by reading the code.

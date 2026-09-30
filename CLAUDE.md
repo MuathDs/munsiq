@@ -322,27 +322,57 @@ FIXED, and worth remembering why:
   `test_pipeline.py::test_a_null_required_field_is_never_left_green`,
   `test_workspace_api.py::test_revalidation_turns_a_green_null_required_field_amber`.
 
-  Found alongside, NOT fixed — both are pre-existing and recorded rather than
-  fixed out of scope:
+  Found alongside: revalidation erased page-level findings (FIXED 2026-09-30,
+  entry below), and:
 
-  * **Revalidation erases page-level findings, blocking ones included.**
-    `revalidate_annotation` deletes EVERY `validation_results` row and
-    re-inserts only what the rule registry produces. `OCR_SCRIPT_UNSUPPORTED`,
-    `OCR_ENGINE_UNAVAILABLE`, `PAGE_TEXT_EMPTY` and `PAGE_TEXT_UNAVAILABLE` are
-    written by `pipeline._record_findings`, not by rules, so they do not come
-    back: a document blocked by an unreadable page becomes confirmable after a
-    reviewer corrects any unrelated field. Seen directly: revalidating the
-    contractor invoice (to confirm the fix above) removed its
-    `OCR_SCRIPT_UNSUPPORTED` error, and its `blockers` went to `[]`. The fix is
-    to delete only rows whose `rule_code` is in the registry, or to recompute
-    the page findings on revalidation from the stored `pages.text_source`.
-  * **A reviewer's `delete` never takes effect.** The corrections endpoint
+  * **A reviewer's `delete` never takes effect** (NOT fixed). The corrections endpoint
     writes `value_final = NULL` for a delete, and NULL there means "never
     edited" to both `revalidate` and the UI's `currentValue()`, so the original
     extracted value comes back. Found by reading the code, not by a failing
     test. Needs a representation for "deliberately emptied" (an empty string,
     or a flag) — until then REQUIRED_FIELD_MISSING cannot see a reviewer's
     deletion, only an extracted null or a field cleared to an empty string.
+- **Revalidation erased page-level findings, blocking ones included** (fixed
+  2026-09-30). `revalidate_annotation` deleted EVERY `validation_results` row
+  and re-inserted only registry-rule results, but the page findings
+  (`OCR_SCRIPT_UNSUPPORTED`, `OCR_ENGINE_UNAVAILABLE`, `PAGE_TEXT_EMPTY`,
+  `PAGE_TEXT_UNAVAILABLE`) and the model-run findings were written by the
+  pipeline alone — so a reviewer's first edit on a document blocked by an
+  unreadable page made it confirmable, and a prompt-injection report vanished.
+  Now: page findings come from one pure function,
+  `validation/page_findings.py`, that needs only the pages' stored
+  `text_source` and whether a required field is missing, and BOTH the pipeline
+  and revalidation append its results to the rule report (so they also reach
+  `annotations.blockers` and `automated`, which the pipeline's cached list
+  used to miss). Revalidation replaces every recomputable row — rules, page
+  findings, and codes nothing emits any more (`TRN_CHECKSUM`) — and keeps
+  `PRESERVED_CODES` (`SUSPICIOUS_DOCUMENT_CONTENT`, `PIPELINE_FAILED`), which
+  need the model's output. `by_reviewer=False` is a system refresh that does
+  not mark an annotation human-touched. STILL a gap: `XML_PDF_MISMATCH`
+  needs the model's reading beside the signed value, which is not persisted,
+  so a revalidation cannot re-check it and clears it rather than keep an
+  unclearable row. `tests/test_page_findings.py`,
+  `tests/test_workspace_api.py` (the revalidation tests).
+- **A tax-inclusive receipt's subtotal was the total, copied** (fixed
+  2026-09-30). A simplified (B2C) receipt prints the total and the VAT inside
+  it, no subtotal; the model copied the total into `subtotal`, and
+  GRAND_TOTAL_MISMATCH and VAT_CALC_MISMATCH blocked a consistent receipt
+  (seen on a real one). Fixed deterministically after extraction, not by
+  prompt: `extraction/totals.derive_tax_exclusive_subtotal` sets subtotal =
+  total − VAT (Decimal, 2 dp) when subtotal == total, VAT > 0 and total − VAT >
+  0, only for a model-read value (never signed XML). The field gets a new
+  provenance, `computed` — shown as "Derived / محسوب" in the workspace — its
+  box is dropped (the old one was the total's), its confidence is the lower of
+  the total's and the VAT's, and it is `review_suggested`: it is only as right
+  as its inputs. `OCR_SUBSTRING_MISSING` exempts `computed` values (printed
+  nowhere by construction). The subtotal guideline also gained a line for
+  receipts, as a request; the derivation is the guarantee. Alongside, amounts
+  are compared as Decimals wherever validation compares two values:
+  `engine.same_value` is used by XML_PDF_MISMATCH and by the runner's own
+  mismatch check (which used a raw string `!=`), and OCR_SUBSTRING_MISSING
+  gained a third, numeric chance, so "2.30" and "2.3" are one number.
+  `tests/test_totals.py`,
+  `test_pipeline.py::test_a_copied_receipt_total_is_stored_as_a_computed_subtotal`.
 - **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
   `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
   and a fixed seed changed nothing (greedy decoding). Consecutive documents share

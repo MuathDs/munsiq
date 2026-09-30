@@ -8,6 +8,9 @@ page. So every numeric value is checked against the document's own text.
 
 from __future__ import annotations
 
+import re
+from decimal import Decimal
+
 from app.services.extraction.routing import (
     ARTICLE_SHARE_OF_REAL_TEXT,
     SHATTERED_SINGLE_LETTER_SHARE,
@@ -20,6 +23,8 @@ from app.services.validation.engine import (
     ValidationContext,
     failure,
     rule,
+    same_value,
+    to_decimal,
 )
 
 SELLER_NAME = "seller_name"
@@ -47,7 +52,7 @@ def xml_and_model_agree(ctx: ValidationContext) -> list[RuleResult] | None:
         if not entry.from_ubl or entry.value is None or entry.shadow_value is None:
             continue
         compared += 1
-        if normalize_for_match(entry.value) == normalize_for_match(entry.shadow_value):
+        if same_value(entry.value, entry.shadow_value, numeric=key in ctx.numeric_keys):
             continue
         findings.append(
             failure(
@@ -83,7 +88,7 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
     sides, so Arabic-Indic digits, thousands separators and invisible format
     characters do not cause false alarms.
 
-    TWO EXEMPTIONS, both load-bearing:
+    THREE EXEMPTIONS, all load-bearing:
 
     * **UBL values.** They were read from a signed attachment, not the rendered
       page, and a compliant invoice can carry a value in its XML that is not
@@ -94,6 +99,12 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
       definition will not appear in the OCR text. Applying the guard to human
       input would make a bad OCR read permanently unfixable: every correction
       would re-trigger the blocker it was meant to clear.
+    * **Computed values.** A subtotal derived as total - VAT on a tax-inclusive
+      receipt is, by construction, printed nowhere; its inputs are checked here
+      in its place.
+
+    A value counts as present when it appears as text, as the same digits, or
+    as the same NUMBER — "2.30" against a page printing "2.3".
     """
     if not ctx.page_text.strip():
         # No text was extracted at all — the page-level failure is already
@@ -102,12 +113,19 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
 
     haystack = normalize_for_match(ctx.page_text)
     haystack_digits = _digits_only(haystack)
+    haystack_numbers: set[Decimal] | None = None  # parsed only if a value needs it
 
     findings: list[RuleResult] = []
     checked = 0
     for key in sorted(ctx.numeric_keys):
         entry = ctx.fields.get(key)
-        if entry is None or entry.value is None or entry.from_ubl or entry.from_human:
+        if (
+            entry is None
+            or entry.value is None
+            or entry.from_ubl
+            or entry.from_human
+            or entry.from_computed
+        ):
             continue
         needle = normalize_for_match(entry.value)
         if not needle:
@@ -122,6 +140,13 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
         needle_digits = _digits_only(needle)
         if needle_digits and needle_digits in haystack_digits:
             continue
+        # Third: the same number written with different trailing zeros.
+        amount = to_decimal(needle)
+        if amount is not None:
+            if haystack_numbers is None:
+                haystack_numbers = _numbers_in(haystack)
+            if amount in haystack_numbers:
+                continue
 
         findings.append(
             failure(
@@ -145,6 +170,16 @@ def numeric_values_appear_on_the_page(ctx: ValidationContext) -> list[RuleResult
 
 def _digits_only(text: str) -> str:
     return "".join(ch for ch in text if ch.isdigit())
+
+
+# A number as a page prints it: digits, optional thousands separators, optional
+# fraction — Arabic separators included, since to_decimal folds them.
+_NUMBER = re.compile(r"\d[\d,٬]*(?:[.٫]\d+)?")
+
+
+def _numbers_in(text: str) -> set[Decimal]:
+    found = (to_decimal(match.group(0)) for match in _NUMBER.finditer(text))
+    return {number for number in found if number is not None}
 
 
 @rule(

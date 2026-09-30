@@ -20,6 +20,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Final
 
 from sqlalchemy import text as sql
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,18 +28,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.invoice import UBLInvoice
 from app.services import storage as storage_mod
 from app.services.normalize import has_arabic
+from app.services.pagetext import TextSource
 from app.services.ubl import MalformedXMLError, parse_ubl_invoice
 from app.services.validation import run_rules
 from app.services.validation.engine import (
+    NUMERIC_TYPES,
     FieldView,
     LineItem,
+    RuleResult,
+    Severity,
     ValidationContext,
     ValidationReport,
 )
+from app.services.validation.page_findings import PageState, missing_required, page_findings
 
 logger = logging.getLogger(__name__)
 
-NUMERIC_TYPES = frozenset({"decimal", "number", "integer", "money"})
+PRESERVED_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # The model reported instruction-like text in the document. Needs the
+        # model's own output, which is not stored.
+        "SUSPICIOUS_DOCUMENT_CONTENT",
+        # Why processing failed (pipeline.FAILURE_RULE); the dashboard reads it.
+        "PIPELINE_FAILED",
+    }
+)
+"""Findings revalidation cannot recompute from stored state, so it never deletes.
+
+Not in this set, on purpose: XML_PDF_MISMATCH. It needs the model's reading
+alongside the signed value, and that reading is not persisted, so a revalidation
+cannot re-check it — but keeping the row would make it unclearable by any
+correction. It is replaced like any rule (and so cleared on revalidation);
+recorded as a known gap in CLAUDE.md."""
 
 
 @dataclass(frozen=True)
@@ -52,24 +73,43 @@ class RevalidateOutcome:
 
 
 async def revalidate_annotation(
-    session: AsyncSession, org_id: uuid.UUID, annotation_id: uuid.UUID
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    annotation_id: uuid.UUID,
+    *,
+    by_reviewer: bool = True,
 ) -> RevalidateOutcome:
     """Rebuild the context from stored state, re-run every rule, replace findings.
 
+    What is replaced: every registry rule and every page-level finding, both
+    recomputed from stored state with TODAY's logic — so a code a rule no
+    longer emits (TRN_CHECKSUM, renamed TRN_FORMAT) disappears, and a page
+    finding recorded under an older rule is re-judged rather than kept or lost.
+    What is kept: ``PRESERVED_CODES``, the findings only a model run can
+    produce, which nothing stored lets us recompute.
+
+    ``by_reviewer=False`` is a system refresh (re-checking old annotations
+    after a rule change): it does not mark the annotation as human-touched,
+    and it only clears `automated` if the refresh finds a blocker.
+
     Returns the fresh report AND the database id each result was written under,
-    aligned 1:1 with ``report.results`` — a rule firing on two fields shares a
-    code, and a caller rendering a list of findings needs something else to key
-    on. The caller is inside a transaction, so either all of it lands or none
-    of it does — an annotation is never left with half its findings replaced.
+    aligned 1:1 with ``report.results`` (preserved findings included, last) — a
+    rule firing on two fields shares a code, and a caller rendering a list of
+    findings needs something else to key on. The caller is inside a
+    transaction, so either all of it lands or none of it does.
     """
-    context = await _context_from_db(session, org_id, annotation_id)
+    context, pages = await _context_from_db(session, org_id, annotation_id)
     report = run_rules(context)
+    report.results.extend(page_findings(pages, missing_required=missing_required(context)))
 
     # Replace rather than append: a finding that no longer fires must disappear,
     # otherwise the fix would never clear the block.
     await session.execute(
-        sql("DELETE FROM validation_results WHERE annotation_id = :a"),
-        {"a": annotation_id},
+        sql(
+            "DELETE FROM validation_results "
+            "WHERE annotation_id = :a AND NOT (rule_code = ANY(:keep))"
+        ),
+        {"a": annotation_id, "keep": sorted(PRESERVED_CODES)},
     )
     finding_ids: list[uuid.UUID] = []
     for result in report.results:
@@ -93,6 +133,29 @@ async def revalidate_annotation(
         assert finding_id is not None  # RETURNING id always yields exactly one row
         finding_ids.append(finding_id)
 
+    preserved = (
+        await session.execute(
+            sql(
+                "SELECT id, rule_code, severity, passed, message_ar, message_en, field_key "
+                "FROM validation_results WHERE annotation_id = :a AND rule_code = ANY(:keep) "
+                "ORDER BY created_at"
+            ),
+            {"a": annotation_id, "keep": sorted(PRESERVED_CODES)},
+        )
+    ).all()
+    for row in preserved:
+        report.results.append(
+            RuleResult(
+                code=row.rule_code,
+                severity=Severity(row.severity),
+                passed=bool(row.passed),
+                message_ar=row.message_ar or "",
+                message_en=row.message_en or "",
+                field_key=row.field_key,
+            )
+        )
+        finding_ids.append(row.id)
+
     blocking = report.blocking_field_keys
     await session.execute(
         sql(
@@ -107,11 +170,18 @@ async def revalidate_annotation(
         {"a": annotation_id, "blocking": list(blocking), "warned": list(report.warned_field_keys)},
     )
     await session.execute(
-        sql("UPDATE annotations SET blockers = CAST(:b AS jsonb), automated = :auto WHERE id = :a"),
+        sql(
+            "UPDATE annotations SET blockers = CAST(:b AS jsonb), "
+            # A reviewer's edit means it is no longer straight-through. A system
+            # refresh keeps the flag unless it found something blocking.
+            "automated = CASE WHEN :by_reviewer THEN false ELSE automated AND :clear END "
+            "WHERE id = :a"
+        ),
         {
             "a": annotation_id,
             "b": _json(report.blockers),
-            "auto": False,  # A human has touched it; it is no longer straight-through.
+            "by_reviewer": by_reviewer,
+            "clear": not report.blockers,
         },
     )
 
@@ -124,8 +194,9 @@ async def revalidate_annotation(
 
 async def _context_from_db(
     session: AsyncSession, org_id: uuid.UUID, annotation_id: uuid.UUID
-) -> ValidationContext:
-    """Assemble a ValidationContext from persisted state."""
+) -> tuple[ValidationContext, list[PageState]]:
+    """Assemble a ValidationContext, and each page's stored text source, from
+    persisted state."""
     header = (
         await session.execute(
             sql(
@@ -167,14 +238,32 @@ async def _context_from_db(
 
     page_rows = (
         await session.execute(
-            sql("SELECT ocr_text FROM pages WHERE document_id = :d ORDER BY page_number"),
+            sql(
+                "SELECT page_number, ocr_text, text_source FROM pages "
+                "WHERE document_id = :d ORDER BY page_number"
+            ),
             {"d": header.document_id},
         )
     ).all()
     page_text = "\n".join(row.ocr_text for row in page_rows if row.ocr_text)
+    pages = [
+        PageState(row.page_number, source)
+        for row in page_rows
+        if (source := _text_source(row.text_source)) is not None
+    ]
 
     invoice = _load_ubl(header.embedded_ubl_key)
-    return _assemble(views, numeric_keys, required_keys, page_text, invoice)
+    return _assemble(views, numeric_keys, required_keys, page_text, invoice), pages
+
+
+def _text_source(raw: str | None) -> TextSource | None:
+    """A page from before `text_source` was recorded cannot be judged; skip it
+    rather than guess it degraded."""
+    try:
+        return TextSource(raw) if raw else None
+    except ValueError:
+        logger.warning("revalidate.unknown_text_source", extra={"value": raw})
+        return None
 
 
 async def _schema_keys(

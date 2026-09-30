@@ -24,6 +24,8 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Final
 
+from app.services.normalize import normalize_for_match, normalize_text
+
 # Money comparisons are exact to the halala, with a one-halala tolerance for
 # rounding differences between a supplier's system and ours. Decimal only:
 # a float comparison here would produce findings that come and go.
@@ -35,6 +37,12 @@ ZERO_VAT_RATE: Final[Decimal] = Decimal("0")
 
 VAT_CATEGORIES: Final[frozenset[str]] = frozenset({"S", "Z", "E", "O"})
 """ZATCA VAT category codes: Standard, Zero-rated, Exempt, Out-of-scope."""
+
+NUMERIC_TYPES: Final[frozenset[str]] = frozenset({"decimal", "number", "integer", "money"})
+"""Schema field types whose values are amounts, compared as Decimals."""
+
+COMPUTED: Final[str] = "computed"
+"""Provenance of a value derived from other fields, not read from the page."""
 
 CREDIT_NOTE_TYPE_CODE: Final[str] = "381"
 DEBIT_NOTE_TYPE_CODE: Final[str] = "383"
@@ -89,6 +97,12 @@ class FieldView:
         value that OCR misread, which by definition will not match the OCR text.
         """
         return self.source == "human"
+
+    @property
+    def from_computed(self) -> bool:
+        """Derived from other fields (a subtotal as total - VAT), so by
+        construction not printed on the page."""
+        return self.source == COMPUTED
 
 
 @dataclass(frozen=True)
@@ -188,6 +202,20 @@ def money(value: Decimal) -> Decimal:
 
 def close_enough(left: Decimal, right: Decimal, tolerance: Decimal = TOLERANCE) -> bool:
     return abs(money(left) - money(right)) <= tolerance
+
+
+def same_value(left: str, right: str, *, numeric: bool) -> bool:
+    """Equal as the field means them: amounts as Decimals ("2.3" == "2.30"),
+    everything else as normalized text ("0012" != "12" for an invoice number).
+
+    Exact, not within a halala: this answers "is it the same value", not "do
+    the totals reconcile". An amount that does not parse falls back to text
+    rather than guessing."""
+    if numeric:
+        a, b = to_decimal(normalize_text(left)), to_decimal(normalize_text(right))
+        if a is not None and b is not None:
+            return a == b
+    return normalize_for_match(left) == normalize_for_match(right)
 
 
 # --------------------------------------------------------------------------- #

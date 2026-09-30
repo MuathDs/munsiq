@@ -79,7 +79,7 @@ class ExtractedField(Base, OrgScopedMixin):
     """One field value, with its provenance.
 
     ``source`` mirrors the ExtractedField schema in app/schemas/invoice.py:
-    'ubl_xml' | 'vlm' | 'ocr_rule' | 'human'. A 'ubl_xml' value came out of the
+    'ubl_xml' | 'vlm' | 'ocr_rule' | 'human' | 'computed'. A 'ubl_xml' value came out of the
     signed attachment and must never be overwritten by a model.
 
     NOTE for Phase 4: rows with ``value_extracted IS NULL`` are meaningful and

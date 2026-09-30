@@ -37,7 +37,8 @@ from app.services.extraction.grounding import ground_value
 from app.services.extraction.prompts import parse_line_item_schema, parse_schema
 from app.services.extraction.routing import resolve_mode
 from app.services.extraction.runner import ExtractedValue, ExtractionResult, run_extraction
-from app.services.pagetext import PageText, TextSource, extract_page_text
+from app.services.extraction.totals import derive_tax_exclusive_subtotal
+from app.services.pagetext import PageText, extract_page_text
 from app.services.raster import TooManyPagesError, rasterize, rasterize_pages
 from app.services.ubl import (
     MalformedPDFError,
@@ -47,6 +48,7 @@ from app.services.ubl import (
 )
 from app.services.validation import run_rules
 from app.services.validation.context import build_context
+from app.services.validation.page_findings import PageState, missing_required, page_findings
 
 logger = logging.getLogger(__name__)
 
@@ -283,12 +285,23 @@ async def _process(
     outcome.model_called = result.model_called
     outcome.field_count = len(result.values)
 
+    # A tax-inclusive receipt prints no subtotal and the model copies the total
+    # into it; repaired here deterministically, not left to the prompt.
+    derive_tax_exclusive_subtotal(result.values)
+
     # ---------------------------------------------------------------- #
     # 4b. Deterministic validation — runs before the annotation reaches
     # 'to_review', so a reviewer never sees an unchecked document.
     # ---------------------------------------------------------------- #
-    report = run_rules(
-        build_context(values=result.values, fields=fields, pages=pages, invoice=ubl_invoice)
+    context = build_context(values=result.values, fields=fields, pages=pages, invoice=ubl_invoice)
+    report = run_rules(context)
+    # Page-level findings join the report, so the blocker list, `automated` and
+    # the stored rows all see them — the same function revalidation uses.
+    report.results.extend(
+        page_findings(
+            [PageState(p.page_number, p.source, p.note) for p in pages],
+            missing_required=missing_required(context),
+        )
     )
     blocking_keys = report.blocking_field_keys
     outcome.blockers = report.blockers
@@ -402,7 +415,7 @@ async def _process(
                 },
             )
 
-        await _record_findings(session, org_id, annotation_id, pages, result, fields)
+        await _record_findings(session, org_id, annotation_id, result)
         await _record_rule_results(session, org_id, annotation_id, report)
 
     logger.info(
@@ -436,44 +449,12 @@ async def _load_schema(session, queue_id) -> tuple[uuid.UUID | None, dict[str, A
     return row.id, row.definition
 
 
-async def _record_findings(session, org_id, annotation_id, pages, result, fields) -> None:  # type: ignore[no-untyped-def]
-    """Write validation_results for degraded pages and UBL/model disagreements.
-
-    A degraded page used to be an unconditional blocking error whenever the OCR
-    engine could not read its script — even a nearly blank filler page on an
-    otherwise-fine invoice. It now blocks only when the document as a whole has
-    nothing readable, or a REQUIRED field is missing (a plausible sign that the
-    value this page was supposed to carry never arrived). A blank page that sat
-    alongside a fully-readable invoice is worth a warning, not a refusal.
+async def _record_findings(session, org_id, annotation_id, result) -> None:  # type: ignore[no-untyped-def]
+    """Write the findings only the model run can produce: UBL/model disagreements
+    and a prompt-injection report. Revalidation cannot recompute either (the
+    model's readings are not stored), so it preserves or re-derives around them.
+    Page-level findings are part of the rule report — see validation/page_findings.
     """
-    any_usable_page = any(not p.is_degraded for p in pages)
-    header_values = {v.field_key: v.value for v in result.values if v.row_index is None}
-    missing_required = any(header_values.get(spec.key) is None for spec in fields if spec.required)
-    for page in pages:
-        if not page.is_degraded:
-            continue
-        blocking = page.source is TextSource.OCR_UNSUPPORTED_SCRIPT and (
-            not any_usable_page or missing_required
-        )
-        await session.execute(
-            sql(
-                "INSERT INTO validation_results (org_id, annotation_id, rule_code, severity, "
-                "message_ar, message_en, field_key, passed) "
-                "VALUES (:org, :ann, :code, :sev, :ar, :en, NULL, false)"
-            ),
-            {
-                "org": org_id,
-                "ann": annotation_id,
-                "code": _RULE_FOR_SOURCE.get(page.source, "PAGE_TEXT_UNAVAILABLE"),
-                "sev": "error" if blocking else "warning",
-                "ar": _AR_MESSAGE.get(page.source, "تعذّر استخراج نص هذه الصفحة.").format(
-                    page=page.page_number
-                ),
-                "en": (page.note or "No text could be extracted from this page.")
-                + f" (page {page.page_number})",
-            },
-        )
-
     for mismatch in result.mismatches:
         await session.execute(
             sql(
@@ -517,23 +498,6 @@ async def _record_findings(session, org_id, annotation_id, pages, result, fields
                 ),
             },
         )
-
-
-_RULE_FOR_SOURCE = {
-    TextSource.OCR_UNSUPPORTED_SCRIPT: "OCR_SCRIPT_UNSUPPORTED",
-    TextSource.OCR_UNAVAILABLE: "OCR_ENGINE_UNAVAILABLE",
-    TextSource.EMPTY: "PAGE_TEXT_EMPTY",
-}
-
-_AR_MESSAGE = {
-    TextSource.OCR_UNSUPPORTED_SCRIPT: (
-        "الصفحة {page}: لا تحتوي على طبقة نصية، ولم يتعرّف المحرك على أي نص. "
-        "محرك التعرّف الضوئي الحالي لا يدعم اللغة العربية، لذلك لا يمكن تمييز "
-        "الصفحة العربية الممسوحة ضوئياً عن الصفحة الفارغة."
-    ),
-    TextSource.OCR_UNAVAILABLE: "الصفحة {page}: محرك التعرّف الضوئي غير متاح.",
-    TextSource.EMPTY: "الصفحة {page}: لم يُعثر على أي نص.",
-}
 
 
 def _json_or_none(value: dict[str, float | int] | None) -> str | None:

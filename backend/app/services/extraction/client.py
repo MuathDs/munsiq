@@ -44,7 +44,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 import httpx
 
@@ -55,6 +55,24 @@ logger = logging.getLogger(__name__)
 
 class InferenceError(Exception):
     """The model endpoint failed or returned something unusable."""
+
+
+# Cloudflare's "A timeout occurred": its free quick tunnel (trycloudflare.com)
+# closes any request still unanswered after 100 seconds, while the origin keeps
+# generating. Not an Ollama status — only a tunnel in front of it sends this.
+CLOUDFLARE_TIMEOUT: Final = 524
+CLOUDFLARE_TIMEOUT_S: Final = 100
+
+
+def _tunnel_timeout_message(base_url: str) -> str:
+    host = httpx.URL(base_url).host
+    return (
+        f"The inference server at {host} did not answer in time (HTTP 524): the "
+        f"Cloudflare tunnel in front of it closes a request after "
+        f"{CLOUDFLARE_TIMEOUT_S} seconds, and this one took longer. Not retried — the "
+        "same prompt would take as long again. Use a smaller model or fewer pages, or "
+        "reach the server without the tunnel's limit."
+    )
 
 
 @dataclass
@@ -152,6 +170,10 @@ class OllamaClient:
             try:
                 with httpx.Client(timeout=self.timeout_s) as client:
                     response = client.post(f"{self.base_url}/api/chat", json=payload)
+                    if response.status_code == CLOUDFLARE_TIMEOUT:
+                        # Raised inside the try but not caught below: InferenceError is
+                        # none of the retried types, so a 524 fails on the first attempt.
+                        raise InferenceError(_tunnel_timeout_message(self.base_url))
                     response.raise_for_status()
                     body = response.json()
                 message = body["message"]

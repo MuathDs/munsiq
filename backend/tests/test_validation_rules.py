@@ -26,6 +26,7 @@ from app.services.validation.engine import (
     money,
     registry,
     run_rules,
+    same_value,
     to_decimal,
 )
 from app.services.validation.rules.arithmetic import (
@@ -552,6 +553,48 @@ def test_mismatch_rule_ignores_non_ubl_fields() -> None:
     assert xml_and_model_agree(context) is None
 
 
+def test_equal_amounts_written_differently_are_not_a_mismatch() -> None:
+    """2.30 in the XML and 2.3 from the model are one number. Compared as
+    strings they 'disagree', which blocked a correct invoice."""
+    context = ctx(
+        fields={
+            "vat_amount": FieldView(
+                key="vat_amount", value="2.30", source="ubl_xml", shadow_value="2.3"
+            )
+        },
+        numeric_keys=frozenset({"vat_amount"}),
+    )
+    assert xml_and_model_agree(context) == []
+
+
+def test_different_amounts_are_still_a_mismatch() -> None:
+    context = ctx(
+        fields={
+            "vat_amount": FieldView(
+                key="vat_amount", value="2.30", source="ubl_xml", shadow_value="2.31"
+            )
+        },
+        numeric_keys=frozenset({"vat_amount"}),
+    )
+    findings = xml_and_model_agree(context)
+    assert findings is not None and [f.field_key for f in findings] == ["vat_amount"]
+
+
+def test_a_non_numeric_field_is_still_compared_as_text() -> None:
+    """Decimal comparison is for amounts only: invoice numbers "0012" and "12"
+    are different invoices."""
+    context = ctx(
+        fields={
+            "invoice_number": FieldView(
+                key="invoice_number", value="0012", source="ubl_xml", shadow_value="12"
+            )
+        },
+        numeric_keys=frozenset({"total_amount"}),
+    )
+    findings = xml_and_model_agree(context)
+    assert findings is not None and len(findings) == 1
+
+
 # --------------------------------------------------------------------------- #
 # OCR_SUBSTRING_MISSING — the anti-hallucination guard
 # --------------------------------------------------------------------------- #
@@ -633,6 +676,68 @@ def test_rule_not_applicable_when_no_text_was_extracted() -> None:
         fields={"total_amount": FieldView(key="total_amount", value="1.00", source="vlm")},
         numeric_keys=frozenset({"total_amount"}),
         page_text="   ",
+    )
+    assert numeric_values_appear_on_the_page(context) is None
+
+
+def test_an_amount_printed_with_fewer_decimals_is_found() -> None:
+    """The model returned 2.30; the receipt prints 2.3. Same number — neither the
+    substring check nor the digits-only check sees it, the Decimal check does."""
+    context = ctx(
+        fields={"vat_amount": FieldView(key="vat_amount", value="2.30", source="vlm")},
+        numeric_keys=frozenset({"vat_amount"}),
+        page_text="Total 17.65 VAT 2.3",
+    )
+    assert numeric_values_appear_on_the_page(context) == []
+
+
+def test_a_different_amount_is_still_caught_after_the_decimal_check() -> None:
+    context = ctx(
+        fields={"vat_amount": FieldView(key="vat_amount", value="2.40", source="vlm")},
+        numeric_keys=frozenset({"vat_amount"}),
+        page_text="Total 17.65 VAT 2.3",
+    )
+    findings = numeric_values_appear_on_the_page(context)
+    assert findings is not None and [f.field_key for f in findings] == ["vat_amount"]
+
+
+def test_several_amounts_share_one_parse_of_the_page() -> None:
+    """Two values that both need the numeric check: the page's numbers are
+    parsed once and reused, and both still match."""
+    context = ctx(
+        fields={
+            "vat_amount": FieldView(key="vat_amount", value="2.30", source="vlm"),
+            "total_amount": FieldView(key="total_amount", value="17.650", source="vlm"),
+        },
+        numeric_keys=frozenset({"vat_amount", "total_amount"}),
+        page_text="Total 17.65 VAT 2.3",
+    )
+    assert numeric_values_appear_on_the_page(context) == []
+
+
+def test_an_amount_that_does_not_parse_is_still_caught() -> None:
+    context = ctx(
+        fields={"total_amount": FieldView(key="total_amount", value="12.3.4", source="vlm")},
+        numeric_keys=frozenset({"total_amount"}),
+        page_text="Total 17.65 VAT 2.3",
+    )
+    findings = numeric_values_appear_on_the_page(context)
+    assert findings is not None and [f.field_key for f in findings] == ["total_amount"]
+
+
+def test_same_value_falls_back_to_text_for_an_amount_that_does_not_parse() -> None:
+    assert same_value("n/a", "N/A", numeric=True) is True
+    assert same_value("n/a", "none", numeric=True) is False
+    assert same_value("2.3", "2.30", numeric=True) is True
+    assert same_value("2.3", "2.30", numeric=False) is False
+
+
+def test_computed_values_are_exempt_from_the_page_check() -> None:
+    """A subtotal derived as total - VAT is, by construction, not printed."""
+    context = ctx(
+        fields={"subtotal": FieldView(key="subtotal", value="15.35", source="computed")},
+        numeric_keys=frozenset({"subtotal"}),
+        page_text="Total 17.65 VAT 2.30",
     )
     assert numeric_values_appear_on_the_page(context) is None
 

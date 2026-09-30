@@ -52,6 +52,7 @@ const BAR: Record<ProvenanceKind, string> = {
   extracted: "bg-warning",
   mismatch: "bg-danger",
   human: "bg-accent-strong",
+  derived: "bg-ink-soft",
   absent: "bg-line-strong",
 };
 

@@ -15,12 +15,11 @@ from app.services.extraction.runner import ExtractedValue
 from app.services.normalize import has_arabic
 from app.services.pagetext import PageText
 from app.services.validation.engine import (
+    NUMERIC_TYPES,
     FieldView,
     LineItem,
     ValidationContext,
 )
-
-NUMERIC_TYPES = frozenset({"decimal", "number", "integer", "money"})
 
 
 def build_context(

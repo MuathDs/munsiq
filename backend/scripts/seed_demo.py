@@ -134,6 +134,8 @@ INVOICE_SCHEMA: dict[str, object] = {
                 "If the document states only ONE amount and it is a tax-inclusive total "
                 "(for example a purchase summary, or a line such as 'total including "
                 "VAT'), the subtotal is null — never copy the total into it. "
+                "On a simplified tax invoice (a receipt) that prints only the total and "
+                "the VAT, do not copy the total into the subtotal. "
                 "Digits only, keep the decimal point."
             ),
         },

@@ -67,7 +67,10 @@ class ExportField(BaseModel):
     type: str = "string"
     value: str | None = Field(description="The confirmed value: the reviewer's if corrected.")
     source: str | None = Field(
-        description="'ubl_xml' (signed attachment) | 'vlm' (model) | 'ocr_rule' | 'human'."
+        description=(
+            "'ubl_xml' (signed attachment) | 'vlm' (model) | 'ocr_rule' | 'human' | "
+            "'computed' (derived from other fields, e.g. subtotal = total - VAT)."
+        )
     )
     confidence: Decimal | None = None
     bbox: ExportBBox | None = None

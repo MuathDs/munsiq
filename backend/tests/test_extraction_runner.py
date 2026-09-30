@@ -128,6 +128,32 @@ def test_disagreement_produces_a_mismatch_finding() -> None:
     assert mismatch["model_value"] == "WRONG-FROM-MODEL"
 
 
+def test_equal_amounts_written_differently_produce_no_mismatch() -> None:
+    """52118.00 signed and 52118 read are the same number. The runner writes the
+    pipeline's XML_PDF_MISMATCH rows, so its comparison must be a Decimal one."""
+    fields = [
+        FieldSpec(key="total_amount", type="decimal", label_en="Total", required=True),
+        FieldSpec(key="invoice_number", label_en="Invoice number", required=True),
+    ]
+    client = FakeClient({"total_amount": "52118", "invoice_number": "SA-2026-0334"})
+    result = run_extraction(
+        client=client,
+        fields=fields,
+        pages=[PAGE],
+        ubl_values={"total_amount": "52118.00", "invoice_number": "SA-2026-0334"},
+    )
+    assert result.mismatches == []
+
+
+def test_a_different_amount_is_still_a_runner_mismatch() -> None:
+    fields = [FieldSpec(key="total_amount", type="decimal", label_en="Total", required=True)]
+    client = FakeClient({"total_amount": "52118.01"})
+    result = run_extraction(
+        client=client, fields=fields, pages=[PAGE], ubl_values={"total_amount": "52118.00"}
+    )
+    assert [m["field_key"] for m in result.mismatches] == ["total_amount"]
+
+
 def test_agreement_produces_no_mismatch() -> None:
     client = FakeClient(
         {

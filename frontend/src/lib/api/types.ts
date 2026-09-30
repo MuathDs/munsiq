@@ -8,7 +8,8 @@
  */
 
 /** Drives the provenance badge — the core visual distinction in this product. */
-export type FieldSource = "ubl_xml" | "vlm" | "ocr_rule" | "human";
+/** 'computed' is derived from other fields (a subtotal as total - VAT), not read. */
+export type FieldSource = "ubl_xml" | "vlm" | "ocr_rule" | "human" | "computed";
 
 export type ValidationState = "blocking" | "review_suggested" | "auto_validated";
 

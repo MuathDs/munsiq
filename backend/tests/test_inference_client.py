@@ -212,6 +212,60 @@ def test_num_ctx_override_defaults_to_the_text_setting(monkeypatch: pytest.Monke
     assert OllamaClient(max_retries=0).num_ctx == get_settings().INFERENCE_NUM_CTX
 
 
+# --------------------------------------------------------------------------- #
+# A tunnel that cuts long requests
+# --------------------------------------------------------------------------- #
+def cloudflare_timeout(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
+    """Answer every request the way a Cloudflare quick tunnel does at 100 s."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            524,
+            text="<!DOCTYPE html><html><head><title>A timeout occurred</title></head>"
+            "<body>Error code 524 ... Cloudflare Ray ID: 8c1f2a3b4d5e6f70</body></html>",
+        )
+
+    real_client = httpx.Client
+
+    def make_client(*args: Any, **kwargs: Any) -> httpx.Client:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", make_client)
+    return seen
+
+
+def test_a_tunnel_timeout_fails_with_a_clear_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 524 is Cloudflare closing the request at 100 s, not a server bug: say so,
+    in words a reviewer can act on, instead of an HTTP trace or a page of HTML."""
+    cloudflare_timeout(monkeypatch)
+
+    with pytest.raises(InferenceError) as raised:
+        OllamaClient(max_retries=0, base_url="https://example.trycloudflare.com").chat(
+            system="s", user="u"
+        )
+
+    message = str(raised.value)
+    assert "524" in message
+    assert "100 seconds" in message
+    assert "example.trycloudflare.com" in message
+    assert "<html" not in message.lower(), "the tunnel's error page must not leak through"
+    assert "Server error" not in message, "not httpx's raw status text"
+
+
+def test_a_tunnel_timeout_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same prompt would take just as long again, and a retry resubmits the
+    whole generation to a server that may still be running the first one."""
+    seen = cloudflare_timeout(monkeypatch)
+
+    with pytest.raises(InferenceError):
+        OllamaClient(max_retries=2).chat(system="s", user="u")
+
+    assert len(seen) == 1
+
+
 def test_the_guard_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     """The same prompt would overflow again; retrying only burns GPU time."""
     num_ctx = get_settings().INFERENCE_NUM_CTX

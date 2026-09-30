@@ -87,11 +87,22 @@ it cannot do is make that number appear on the page.
 Both sides are normalized before comparison, so Arabic-Indic digits, thousands
 separators and invisible format characters do not raise false alarms. A second
 pass compares digits only, so a page printing `52,118.00` against a model
-returning `52118.00` is a formatting difference, not a fabrication.
+returning `52118.00` is a formatting difference, not a fabrication. A third
+compares numbers as Decimals, so `2.30` against a page printing `2.3` is the
+same amount.
 
-Values sourced from the signed UBL are exempt: they were read from an
+Three sources are exempt. Values from the signed UBL were read from an
 attachment, not the rendered page, and a compliant invoice can legitimately
-carry a value in its XML that is not printed on its face.
+carry a value in its XML that is not printed on its face. A reviewer's
+correction has authority the model does not. And a `computed` value — a
+receipt's subtotal derived as total − VAT (`extraction/totals.py`) — is printed
+nowhere by construction; its two inputs are checked here in its place.
+
+**Amounts are compared as Decimals throughout.** Arithmetic and QR checks
+always were; `engine.same_value` now does the same for `XML_PDF_MISMATCH` and
+for the extraction runner's own mismatch check, so `2.3` and `2.30` never
+disagree. A non-amount field (an invoice number) is still compared as text:
+`0012` and `12` are different invoices.
 
 ### Completeness — `rules/completeness.py`
 
@@ -124,6 +135,16 @@ The blocker set is **recomputed from `validation_results` on every call**, never
 read from the cached `annotations.blockers` list. Fixing the data and re-running
 validation is what clears a block; editing the cached list does not.
 
+**Page-level findings** (`OCR_SCRIPT_UNSUPPORTED`, `OCR_ENGINE_UNAVAILABLE`,
+`PAGE_TEXT_EMPTY`) come from `validation/page_findings.py`, which the pipeline
+and revalidation share. An unreadable-script page blocks only when nothing else
+in the document is readable or a required field is still missing; otherwise it
+warns. Revalidation (`services/revalidate.py`, run after every correction)
+replaces every finding it can recompute from stored state — rules and page
+findings, re-judged under today's logic — and keeps the two it cannot:
+`SUSPICIOUS_DOCUMENT_CONTENT` and `PIPELINE_FAILED`, which need the model run's
+own output.
+
 ## Bilingual messages
 
 Every rule carries Arabic and English. The Arabic is written, not
@@ -136,22 +157,24 @@ not add up" is far less useful to a reviewer than naming both numbers:
 
 ## Coverage
 
-Measured 2026-09-25, `pytest --cov=app/services/validation --cov-branch` over
-`test_validation_rules.py` and `test_validation_context.py` (120 tests):
+Measured 2026-09-30, `pytest --cov=app/services/validation --cov-branch` over
+`test_validation_rules.py`, `test_validation_context.py` and
+`test_page_findings.py` (138 tests):
 
 ```
 Name                                            Stmts   Miss Branch BrPart  Cover
 ---------------------------------------------------------------------------------
 app/services/validation/__init__.py                 4      0      0      0   100%
-app/services/validation/context.py                 34      0      4      0   100%
-app/services/validation/engine.py                 160      0     18      0   100%
+app/services/validation/context.py                 33      0      4      0   100%
+app/services/validation/engine.py                 174      0     22      0   100%
+app/services/validation/page_findings.py           32      0      4      0   100%
 app/services/validation/rules/__init__.py           3      0      0      0   100%
 app/services/validation/rules/arithmetic.py        93      0     46      0   100%
 app/services/validation/rules/completeness.py      13      0      6      0   100%
-app/services/validation/rules/provenance.py        89      0     44      0   100%
+app/services/validation/rules/provenance.py       102      0     50      0   100%
 app/services/validation/rules/zatca.py            105      0     54      0   100%
 ---------------------------------------------------------------------------------
-TOTAL                                             501      0    172      0   100%
+TOTAL                                             559      0    186      0   100%
 ```
 
 Statement *and* branch coverage, since a rule's value is entirely in its edge

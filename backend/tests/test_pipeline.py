@@ -270,6 +270,82 @@ async def test_a_null_required_field_is_never_left_green(tenant, monkeypatch) ->
     assert "REQUIRED_FIELD_MISSING" not in outcome.blockers
 
 
+RECEIPT_SCHEMA = {
+    "name": "receipt schema",
+    "fields": [
+        {"key": "invoice_number", "type": "string", "required": True},
+        {"key": "subtotal", "type": "decimal", "required": True},
+        {"key": "vat_amount", "type": "decimal", "required": True},
+        {"key": "total_amount", "type": "decimal", "required": True},
+    ],
+}
+
+
+class CopiedTotalClient(RecordingClient):
+    """What the model does on a tax-inclusive receipt: subtotal = the total."""
+
+    def chat(self, *, system, user, images=None, json_mode=True):  # type: ignore[no-untyped-def]
+        result = super().chat(system=system, user=user, images=images, json_mode=json_mode)
+        result.content = json.dumps(
+            {
+                "invoice_number": "RCPT-0001",
+                "subtotal": "17.65",
+                "vat_amount": "2.30",
+                "total_amount": "17.65",
+            }
+        )
+        return result
+
+
+async def test_a_copied_receipt_total_is_stored_as_a_computed_subtotal(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Synthetic simplified receipt: 17.65 total, 2.30 VAT. Before the derivation
+    it was blocked by GRAND_TOTAL_MISMATCH and VAT_CALC_MISMATCH."""
+    org_id, queue_id = tenant
+    async with get_sessionmaker()() as session, session.begin():
+        await session.execute(
+            sql(
+                "INSERT INTO extraction_schemas (org_id, queue_id, version, definition) "
+                "VALUES (:o, :q, 2, CAST(:d AS jsonb))"
+            ),
+            {"o": org_id, "q": queue_id, "d": json.dumps(RECEIPT_SCHEMA)},
+        )
+    monkeypatch.setattr(pipeline_mod, "OllamaClient", CopiedTotalClient)
+    pdf = fixtures.build_pdf_with_text_layer(
+        lines=(
+            "SIMPLIFIED TAX INVOICE",
+            "Invoice No: RCPT-0001",
+            "Total incl. VAT: 17.65 SAR",
+            "VAT 15%: 2.30",
+        )
+    )
+    document_id = await _insert_document(org_id, queue_id, pdf)
+
+    outcome = await pipeline_mod.process_document(org_id, document_id)
+
+    assert outcome.error is None and outcome.annotation_id is not None
+    fields = await _fields(org_id, outcome.annotation_id)
+    assert fields["subtotal"]["value"] == "15.35"
+    assert fields["subtotal"]["source"] == "computed"
+    assert fields["subtotal"]["state"] == "review_suggested"
+    assert fields["subtotal"]["bbox"] is None
+    assert fields["total_amount"]["value"] == "17.65"
+    assert outcome.blockers == []
+    async with get_sessionmaker()() as session, session.begin():
+        failed = {
+            r[0]
+            for r in (
+                await session.execute(
+                    sql(
+                        "SELECT rule_code FROM validation_results "
+                        "WHERE annotation_id = :a AND passed = false"
+                    ),
+                    {"a": outcome.annotation_id},
+                )
+            ).all()
+        }
+    assert not failed & {"GRAND_TOTAL_MISMATCH", "VAT_CALC_MISMATCH", "OCR_SUBSTRING_MISSING"}
+
+
 async def test_values_are_grounded_to_the_text_layer(tenant, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Grounding on a text-layer page comes from the PDF's own word boxes."""
     org_id, queue_id = tenant

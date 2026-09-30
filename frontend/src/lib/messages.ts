@@ -57,6 +57,9 @@ const en = {
       "The signed XML and the model disagree. The XML value is authoritative. Resolve this before confirming.",
     human: "Corrected",
     humanTooltip: "A reviewer set this value.",
+    derived: "Derived",
+    derivedTooltip:
+      "Calculated from other fields, not read from the page: on a tax-inclusive receipt the subtotal is the total minus the VAT. It is printed nowhere, so there is no box to show, and it is only as right as the total and VAT it came from.",
     ocrRule: "Not extracted",
     ocrRuleTooltip:
       "No value was extracted for this field. Nobody has verified whether it is absent from the document.",
@@ -343,6 +346,9 @@ const ar: Messages = {
       "ملف XML الموقّع والنموذج لا يتفقان. القيمة المعتمدة هي قيمة XML. يجب حلّ هذا التعارض قبل الاعتماد.",
     human: "مُصحّح",
     humanTooltip: "قام أحد المراجعين بتعيين هذه القيمة.",
+    derived: "محسوب",
+    derivedTooltip:
+      "حُسبت هذه القيمة من حقول أخرى ولم تُقرأ من الصفحة: في الإيصال الشامل للضريبة يكون المجموع قبل الضريبة هو الإجمالي ناقص الضريبة. لا تظهر مطبوعة في أي مكان، لذا لا يوجد إطار لعرضه، وصحّتها مرهونة بصحة الإجمالي والضريبة اللذين حُسبت منهما.",
     ocrRule: "غير مستخرج",
     ocrRuleTooltip:
       "لم تُستخرج أي قيمة لهذا الحقل، ولم يتحقق أحد بعد مما إذا كان غير موجود في المستند.",

@@ -13,6 +13,9 @@
  *                          its confidence.
  *   RED    تعارض          — the signed XML and the model disagree. The XML
  *                          wins; the reviewer must resolve it before confirming.
+ *   NEUTRAL محسوب         — calculated from other fields (a receipt's subtotal
+ *                          as total − VAT), so printed nowhere: nothing to point
+ *                          at on the page, and only as right as its inputs.
  *
  * The distinction is the whole argument for this architecture: a compliant
  * Saudi invoice already contains its own answer, and a system that knows the
@@ -21,12 +24,18 @@
  * discovered on inspection.
  */
 
-import { Bot, CircleDashed, ShieldCheck, TriangleAlert, UserPen } from "lucide-react";
+import { Bot, Calculator, CircleDashed, ShieldCheck, TriangleAlert, UserPen } from "lucide-react";
 
 import type { FieldSource } from "@/lib/api/types";
 import type { Messages } from "@/lib/messages";
 
-export type ProvenanceKind = "verified" | "extracted" | "mismatch" | "human" | "absent";
+export type ProvenanceKind =
+  | "verified"
+  | "extracted"
+  | "mismatch"
+  | "human"
+  | "derived"
+  | "absent";
 
 export function provenanceOf(source: FieldSource | null, hasMismatch: boolean): ProvenanceKind {
   // A mismatch outranks everything: the field has a signed value AND a
@@ -35,6 +44,7 @@ export function provenanceOf(source: FieldSource | null, hasMismatch: boolean): 
   if (source === "ubl_xml") return "verified";
   if (source === "human") return "human";
   if (source === "vlm") return "extracted";
+  if (source === "computed") return "derived";
   return "absent";
 }
 
@@ -43,6 +53,7 @@ const STYLES: Record<ProvenanceKind, string> = {
   extracted: "border-warning/40 bg-warning-soft text-warning",
   mismatch: "border-danger/50 bg-danger-soft text-danger",
   human: "border-accent/40 bg-accent/15 text-accent-strong",
+  derived: "border-line-strong bg-surface-hover text-ink",
   absent: "border-line-strong bg-line text-ink-soft",
 };
 
@@ -56,6 +67,7 @@ const ICONS: Record<ProvenanceKind, typeof ShieldCheck> = {
   extracted: Bot,
   mismatch: TriangleAlert,
   human: UserPen,
+  derived: Calculator,
   absent: CircleDashed,
 };
 
@@ -69,6 +81,8 @@ export function provenanceLabel(kind: ProvenanceKind, t: Messages): string {
       return t.provenance.mismatch;
     case "human":
       return t.provenance.human;
+    case "derived":
+      return t.provenance.derived;
     case "absent":
       return t.provenance.ocrRule;
   }
@@ -84,6 +98,8 @@ function tooltipFor(kind: ProvenanceKind, t: Messages): string {
       return t.provenance.mismatchTooltip;
     case "human":
       return t.provenance.humanTooltip;
+    case "derived":
+      return t.provenance.derivedTooltip;
     case "absent":
       return t.provenance.ocrRuleTooltip;
   }

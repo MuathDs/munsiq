@@ -32,6 +32,7 @@ from app.services.extraction.prompts import (
     build_user_prompt,
 )
 from app.services.pagetext import PageText
+from app.services.validation.engine import NUMERIC_TYPES, same_value
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,10 @@ def run_extraction(
                 validation_state="auto_validated",
                 shadow_value=model_value,
             )
-            if model_value is not None and model_value.strip() != authoritative.strip():
+            numeric = spec.type.strip().lower() in NUMERIC_TYPES
+            if model_value is not None and not same_value(
+                model_value, authoritative, numeric=numeric
+            ):
                 result.mismatches.append(
                     {
                         "field_key": spec.key,

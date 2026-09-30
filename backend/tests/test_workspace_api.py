@@ -24,8 +24,10 @@ from sqlalchemy import text as sql
 from app.api.deps import get_current_org_id
 from app.config import Settings, get_settings
 from app.db.base import get_sessionmaker
+from app.db.session import session_scope
 from app.main import create_app
 from app.services import storage as storage_mod
+from app.services.revalidate import revalidate_annotation
 from app.services.signed_urls import sign_page_token
 from app.services.storage import LocalStorage
 
@@ -366,6 +368,142 @@ async def test_revalidation_turns_a_green_null_required_field_amber(fx: Fx) -> N
     assert [(f["field_key"], f["severity"]) for f in missing] == [("subtotal", "warning")]
     assert missing[0]["message_ar"] and missing[0]["message_en"]
     assert "REQUIRED_FIELD_MISSING" not in body["blockers"]
+
+
+async def _finding_row(fx: Fx, code: str, severity: str, *, passed: bool = False) -> None:
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql(
+                "INSERT INTO validation_results (org_id, annotation_id, rule_code, severity, "
+                "message_ar, message_en, field_key, passed) "
+                "VALUES (:o, :a, :c, :sev, 'رسالة', 'message', NULL, :p)"
+            ),
+            {"o": fx.org_id, "a": fx.annotation_id, "c": code, "sev": severity, "p": passed},
+        )
+
+
+async def _patch_total(fx: Fx) -> dict:  # type: ignore[type-arg]
+    async with client_as(fx.org_id) as c:
+        r = await c.patch(
+            f"/api/v1/annotations/{fx.annotation_id}/fields",
+            json={"events": [{"field_key": "total_amount", "new_value": "51750.00"}]},
+        )
+    assert r.status_code == 200, r.text
+    body: dict = r.json()  # type: ignore[type-arg]
+    return body
+
+
+async def test_revalidation_recomputes_a_page_finding_instead_of_erasing_it(fx: Fx) -> None:
+    """A document whose only page is unreadable was blocked by the pipeline, and
+    the first unrelated edit used to delete that blocker for good."""
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql("UPDATE pages SET text_source = 'ocr_unsupported_script' WHERE document_id = :d"),
+            {"d": fx.document_id},
+        )
+    await _finding_row(fx, "OCR_SCRIPT_UNSUPPORTED", "error")
+
+    body = await _patch_total(fx)
+
+    pages = [f for f in body["findings"] if f["rule_code"] == "OCR_SCRIPT_UNSUPPORTED"]
+    assert [(f["severity"], f["passed"]) for f in pages] == [("error", False)]
+    assert "OCR_SCRIPT_UNSUPPORTED" in body["blockers"]
+
+
+async def test_a_stale_page_blocker_is_re_judged_under_the_current_rule(fx: Fx) -> None:
+    """The case in the data: an unreadable filler page recorded as a blocking
+    error before 2026-09-23. Today it only warns when another page is readable
+    and no required field is missing — revalidation must apply today's rule."""
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql(
+                "INSERT INTO pages (org_id, document_id, page_number, text_source) "
+                "VALUES (:o, :d, 2, 'ocr_unsupported_script')"
+            ),
+            {"o": fx.org_id, "d": fx.document_id},
+        )
+    await _finding_row(fx, "OCR_SCRIPT_UNSUPPORTED", "error")
+
+    body = await _patch_total(fx)
+
+    pages = [f for f in body["findings"] if f["rule_code"] == "OCR_SCRIPT_UNSUPPORTED"]
+    assert [f["severity"] for f in pages] == ["warning"]
+    assert "OCR_SCRIPT_UNSUPPORTED" not in body["blockers"]
+
+
+async def test_findings_revalidation_cannot_recompute_survive_it(fx: Fx) -> None:
+    """A prompt-injection report needs the model's reading, which is not stored;
+    deleting it would silently discard a security finding."""
+    await _finding_row(fx, "SUSPICIOUS_DOCUMENT_CONTENT", "warning")
+
+    body = await _patch_total(fx)
+
+    assert [f["rule_code"] for f in body["findings"]].count("SUSPICIOUS_DOCUMENT_CONTENT") == 1
+
+
+async def test_a_retired_rule_code_is_removed(fx: Fx) -> None:
+    """TRN_CHECKSUM was renamed TRN_FORMAT; its old rows must not linger."""
+    await _finding_row(fx, "TRN_CHECKSUM", "error")
+
+    body = await _patch_total(fx)
+
+    codes = [f["rule_code"] for f in body["findings"]]
+    assert "TRN_CHECKSUM" not in codes
+    assert "TRN_FORMAT" in codes
+
+
+async def test_a_system_refresh_does_not_claim_a_reviewer_touched_it(fx: Fx) -> None:
+    """A reviewer's edit makes a document no longer straight-through; a bulk
+    re-check of the rules does not — unless it finds a blocker."""
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql(
+                "UPDATE extracted_fields SET value_extracted = '51750.00', "
+                "validation_state = 'auto_validated' "
+                "WHERE annotation_id = :a AND field_key = 'total_amount'"
+            ),
+            {"a": fx.annotation_id},
+        )
+        await s.execute(
+            sql("UPDATE annotations SET automated = true WHERE id = :a"), {"a": fx.annotation_id}
+        )
+
+    async with session_scope(fx.org_id) as s:
+        outcome = await revalidate_annotation(s, fx.org_id, fx.annotation_id, by_reviewer=False)
+    assert outcome.report.blockers == []
+    async with get_sessionmaker()() as s, s.begin():
+        automated = await s.scalar(
+            sql("SELECT automated FROM annotations WHERE id = :a"), {"a": fx.annotation_id}
+        )
+    assert automated is True
+
+    async with session_scope(fx.org_id) as s:
+        await revalidate_annotation(s, fx.org_id, fx.annotation_id)
+    async with get_sessionmaker()() as s, s.begin():
+        automated = await s.scalar(
+            sql("SELECT automated FROM annotations WHERE id = :a"), {"a": fx.annotation_id}
+        )
+    assert automated is False, "a reviewer-initiated revalidation still marks it touched"
+
+
+async def test_a_computed_field_is_served_with_its_provenance(fx: Fx) -> None:
+    """`computed` is a new provenance; the API's Literal must accept it, or every
+    document holding a derived subtotal would fail to load."""
+    async with get_sessionmaker()() as s, s.begin():
+        await s.execute(
+            sql(
+                "UPDATE extracted_fields SET source = 'computed', bbox = NULL "
+                "WHERE annotation_id = :a AND field_key = 'subtotal'"
+            ),
+            {"a": fx.annotation_id},
+        )
+
+    async with client_as(fx.org_id) as c:
+        r = await c.get(f"/api/v1/annotations/{fx.annotation_id}")
+
+    assert r.status_code == 200, r.text
+    subtotal = next(f for f in r.json()["fields"] if f["field_key"] == "subtotal")
+    assert subtotal["source"] == "computed"
 
 
 async def test_correction_is_logged_for_the_flywheel(fx: Fx) -> None:

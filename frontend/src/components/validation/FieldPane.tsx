@@ -163,12 +163,20 @@ export function FieldPane({
   );
 }
 
-const SUMMARY_ORDER: ProvenanceKind[] = ["verified", "extracted", "human", "mismatch", "absent"];
+const SUMMARY_ORDER: ProvenanceKind[] = [
+  "verified",
+  "extracted",
+  "human",
+  "derived",
+  "mismatch",
+  "absent",
+];
 
 const SEGMENT: Record<ProvenanceKind, string> = {
   verified: "bg-success",
   extracted: "bg-warning",
   human: "bg-accent-strong",
+  derived: "bg-ink-soft",
   mismatch: "bg-danger",
   absent: "bg-ink-faint/60",
 };
@@ -191,6 +199,7 @@ function PaneHeader({
     verified: 0,
     extracted: 0,
     human: 0,
+    derived: 0,
     mismatch: 0,
     absent: 0,
   };
