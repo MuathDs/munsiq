@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Compliance and provenance, collapsed into two header chips.
+ * Compliance and provenance, collapsed into header chips.
  *
  * The previous full-width strip put four checks and a model note on one line of
  * 11px text, competing with everything beneath it. Now the header carries one
- * verdict ("ZATCA 4/4") that opens a panel with the detail, plus a chip saying
- * whether the values came from signed XML or a model.
+ * verdict ("ZATCA 4/4") that opens a panel with the detail, plus one chip per
+ * reader — signed XML, QR, model, derived — with the number of fields it filled.
  *
  * The rules remain the single source of truth for compliance; this only renders
  * their verdicts.
@@ -14,17 +14,21 @@
 
 import {
   Bot,
+  Calculator,
   ChevronDown,
   CircleCheck,
   CircleHelp,
   CircleX,
+  QrCode,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import type { ValidationFinding } from "@/lib/api/types";
+import type { ExtractedField, ValidationFinding } from "@/lib/api/types";
 import { interpolate, type Messages } from "@/lib/messages";
+
+import { countSources, SOURCE_ORDER, type SourceKind } from "./sourceCounts";
 
 type Verdict = "ok" | "bad" | "unknown";
 
@@ -45,7 +49,7 @@ interface Check {
 
 function checksFor(hasEmbeddedUbl: boolean, findings: ValidationFinding[], t: Messages): Check[] {
   const qr = verdictFor(findings, "QR_TOTAL_MATCH");
-  const trn = verdictFor(findings, "TRN_CHECKSUM");
+  const trn = verdictFor(findings, "TRN_FORMAT");
   const vat = verdictFor(findings, "VAT_CATEGORY_VALID");
   return [
     {
@@ -190,30 +194,86 @@ export function ZatcaSummary({
 }
 
 /**
- * Where the values came from, as one fact rather than a sentence.
+ * Who read the invoice, as one chip per reader with the fields it filled:
+ * "ZATCA XML · 11", "QR code · 5", "AI · 3", "Derived · 1".
  *
- * "Signed XML · no AI" is the product's whole economic argument — a compliant
- * invoice cost zero model calls — so it earns a header chip of its own.
+ * Every reader is always shown, and one that filled nothing is dimmed rather
+ * than hidden — "no model was used" is the product's whole economic argument
+ * for a compliant invoice, and an absent chip would not say it. Labels collapse
+ * to icon + count below xl, where the header runs out of room; the full
+ * sentence stays in the tooltip and the accessible name.
  */
-export function SourceChip({ modelVersion, t }: { modelVersion: string | null; t: Messages }) {
-  if (!modelVersion) {
-    return (
-      <span
-        title={t.zatca.noModel}
-        className="inline-flex h-8 items-center gap-1.5 rounded-full border border-success/35 bg-success-soft px-3 text-[12px] font-semibold text-success"
-      >
-        <ShieldCheck size={14} aria-hidden />
-        {t.source.signed}
-      </span>
-    );
+const SOURCE_ICON: Record<SourceKind, typeof ShieldCheck> = {
+  xml: ShieldCheck,
+  qr: QrCode,
+  model: Bot,
+  computed: Calculator,
+};
+
+const SOURCE_TONE: Record<SourceKind, string> = {
+  xml: "border-success/35 bg-success-soft text-success",
+  qr: "border-success/35 bg-success-soft text-success",
+  model: "border-warning/35 bg-warning-soft text-warning",
+  computed: "border-line-strong bg-surface-hover text-ink",
+};
+
+const SOURCE_OFF = "border-line bg-surface text-ink-faint opacity-60";
+
+function sourceTitle(kind: SourceKind, count: number, modelVersion: string | null, t: Messages) {
+  switch (kind) {
+    case "xml":
+      return count ? interpolate(t.source.xmlTitle, { count }) : t.source.xmlNone;
+    case "qr":
+      return count ? interpolate(t.source.qrTitle, { count }) : t.source.qrNone;
+    case "model":
+      return modelVersion
+        ? interpolate(t.source.modelTitle, { model: modelVersion, count })
+        : t.source.modelNone;
+    case "computed":
+      return count ? interpolate(t.source.computedTitle, { count }) : t.source.computedNone;
   }
+}
+
+export function SourceChips({
+  fields,
+  modelVersion,
+  t,
+}: {
+  fields: ExtractedField[];
+  modelVersion: string | null;
+  t: Messages;
+}) {
+  const counts = countSources(fields);
   return (
-    <span
-      title={`${t.zatca.modelVersion}: ${modelVersion}`}
-      className="inline-flex h-8 max-w-64 items-center gap-1.5 rounded-full border border-warning/35 bg-warning-soft px-3 text-[12px] font-semibold text-warning"
-    >
-      <Bot size={14} className="shrink-0" aria-hidden />
-      <span className="truncate">{interpolate(t.source.model, { model: modelVersion })}</span>
-    </span>
+    <ul className="flex items-center gap-1.5" aria-label={t.source.title}>
+      {SOURCE_ORDER.map((kind) => {
+        const count = counts[kind];
+        const Icon = SOURCE_ICON[kind];
+        const title = sourceTitle(kind, count, modelVersion, t);
+        return (
+          <li
+            key={kind}
+            title={title}
+            aria-label={`${t.source[kind]} · ${count} — ${title}`}
+            data-source={kind}
+            data-count={count}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-semibold ${
+              count > 0 ? SOURCE_TONE[kind] : SOURCE_OFF
+            }`}
+          >
+            <Icon size={14} className="shrink-0" aria-hidden />
+            <span className="hidden whitespace-nowrap xl:inline" aria-hidden>
+              {t.source[kind]}
+            </span>
+            <span className="hidden opacity-60 xl:inline" aria-hidden>
+              ·
+            </span>
+            <span className="tabular font-mono" aria-hidden>
+              {count}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

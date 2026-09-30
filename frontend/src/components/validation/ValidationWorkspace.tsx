@@ -53,7 +53,7 @@ import {
   type WorkspaceState,
 } from "./useAnnotationReducer";
 import { useFieldNavigation } from "./useFieldNavigation";
-import { SourceChip, ZatcaSummary } from "./ZatcaPanel";
+import { SourceChips, ZatcaSummary } from "./ZatcaPanel";
 
 const MIN_FRACTION = 0.25;
 const MAX_FRACTION = 0.75;
@@ -383,7 +383,7 @@ function Header({
 
       <div className="flex shrink-0 items-center gap-2">
         <ZatcaSummary hasEmbeddedUbl={detail.has_embedded_ubl} findings={state.findings} t={t} />
-        <SourceChip modelVersion={detail.model_version} t={t} />
+        <SourceChips fields={state.fields} modelVersion={detail.model_version} t={t} />
       </div>
 
       <div className="ms-auto flex shrink-0 items-center gap-1.5">
