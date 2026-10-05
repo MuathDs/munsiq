@@ -529,7 +529,9 @@ def _commit() -> str:
         ).stdout.strip()
 
     return git("rev-parse", "--short", "HEAD") + (
-        " + uncommitted changes" if git("status", "--porcelain") else ""
+        " + uncommitted changes"
+        if git("status", "--porcelain", "--", ".", ":!docs/results.md")
+        else ""
     )
 
 
