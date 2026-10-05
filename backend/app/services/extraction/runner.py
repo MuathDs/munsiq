@@ -19,10 +19,12 @@ one boolean decision now and is unrecoverable later.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.services.extraction.client import InferenceClient, InferenceError
+from app.services.extraction.fewshot import FewShotExample
 from app.services.extraction.grounding import ground_value
 from app.services.extraction.labels import label_present
 from app.services.extraction.prompts import (
@@ -91,6 +93,7 @@ def run_extraction(
     ubl_values: dict[str, str] | None = None,
     page_images: list[bytes] | None = None,
     vision_page_numbers: frozenset[int] = frozenset(),
+    examples: Sequence[FewShotExample] = (),
 ) -> ExtractionResult:
     """Extract every requested field, honouring UBL precedence.
 
@@ -117,7 +120,7 @@ def run_extraction(
             result.values.append(_from_ubl_or_null(spec, ubl_values))
         return result
 
-    prompt = build_user_prompt(fields, document_text)
+    prompt = build_user_prompt(fields, document_text, examples=examples)
     try:
         chat = client.chat(system=SYSTEM_PROMPT, user=prompt, images=page_images)
         payload = chat.as_json()

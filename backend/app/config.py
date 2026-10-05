@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     # is not called at all when the invoice already told us the answer.
     EXTRACTION_MODE: Literal["text", "vision", "auto"] = "auto"
 
+    # Show the model two invented receipts with their expected output before the
+    # real document (app/services/extraction/fewshot.py). Off unless a measured
+    # run says it helps: docs/results.md has the runs with and without.
+    EXTRACTION_FEW_SHOT: bool = False
+
     # Deliberately a SEPARATE model, base URL and context size from the text
     # settings above, not a flag on the same client: a heavier VL model
     # (qwen2.5vl:7b, say) belongs on a machine with more VRAM — a Colab

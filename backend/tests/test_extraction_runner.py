@@ -14,6 +14,7 @@ import json
 import pytest
 
 from app.services.extraction.client import ChatResult, InferenceError
+from app.services.extraction.fewshot import RECEIPT_EXAMPLES, FewShotExample
 from app.services.extraction.prompts import (
     DOCUMENT_CLOSE,
     DOCUMENT_OPEN,
@@ -411,3 +412,74 @@ def test_document_text_is_fenced_as_data() -> None:
 def test_schema_without_fields_is_rejected() -> None:
     with pytest.raises(ValueError, match="no 'fields' list"):
         parse_schema({"name": "broken"})
+
+
+# --------------------------------------------------------------------------- #
+# 6. Few-shot examples — optional, synthetic, and never mistaken for the document
+# --------------------------------------------------------------------------- #
+EXAMPLE = FewShotExample(
+    text="CORNER SHOP\nReceipt No 77\nTOTAL 12.50",
+    answer={"invoice_number": "77", "total_amount": "12.50", "store_mood": "cheerful"},
+)
+
+
+def test_without_examples_the_prompt_is_exactly_what_it_was() -> None:
+    assert build_user_prompt(FIELDS, "body", examples=()) == build_user_prompt(FIELDS, "body")
+    assert "EXAMPLE" not in build_user_prompt(FIELDS, "body")
+
+
+def test_an_example_shows_its_text_and_an_answer_with_exactly_the_requested_keys() -> None:
+    """The answer is shaped by the SCHEMA, like the real one: a requested field
+    the example lacks is null, and a key the schema did not ask for is left out."""
+    prompt = build_user_prompt(FIELDS, "body", examples=(EXAMPLE,))
+
+    assert "CORNER SHOP" in prompt
+    shown = json.loads(prompt.split("EXAMPLE 1 ANSWER:", 1)[1].split("<<<", 1)[0])
+    assert shown == {
+        "invoice_number": "77",
+        "seller_trn": None,
+        "total_amount": "12.50",
+        "purchase_order_number": None,
+        SUSPICIOUS_KEY: None,
+    }
+
+
+def test_examples_come_before_the_document_and_outside_its_fence() -> None:
+    """The real document must stay the one thing inside the DOCUMENT fence, and
+    the last thing in the prompt."""
+    prompt = build_user_prompt(FIELDS, "the real receipt", examples=(EXAMPLE, EXAMPLE))
+
+    assert prompt.count(DOCUMENT_OPEN) == 1 and prompt.count(DOCUMENT_CLOSE) == 1
+    before, fenced = prompt.split(DOCUMENT_OPEN, 1)
+    assert "CORNER SHOP" in before and "CORNER SHOP" not in fenced
+    assert "EXAMPLE 2 ANSWER:" in before
+    assert "the real receipt" in fenced
+    assert "never copy a value from an example" in before.lower()
+
+
+def test_the_runner_passes_examples_into_the_prompt() -> None:
+    client = FakeClient({"invoice_number": "SA-2026-0334", "total_amount": "52118.00"})
+    run_extraction(client=client, fields=FIELDS, pages=[PAGE], examples=(EXAMPLE,))
+    assert "CORNER SHOP" in client.calls[0]["user"]
+
+    plain = FakeClient({"invoice_number": "SA-2026-0334"})
+    run_extraction(client=plain, fields=FIELDS, pages=[PAGE])
+    assert "EXAMPLE" not in plain.calls[0]["user"]
+
+
+def test_the_shipped_examples_are_two_synthetic_receipts() -> None:
+    """Invented shops and numbers: one Arabic, one English, one with VAT and one
+    without, so the model sees a null for an absent field in an example too."""
+    assert len(RECEIPT_EXAMPLES) == 2
+    answers = [e.answer for e in RECEIPT_EXAMPLES]
+    assert all(a["seller_name"] and a["total_amount"] for a in answers)
+    assert any(a.get("vat_amount") is None for a in answers), "one example has no VAT"
+    assert any(a.get("vat_amount") for a in answers), "one example states its VAT"
+    assert all(a.get("buyer_name") is None for a in answers), "a receipt names no buyer"
+
+
+def test_few_shot_is_off_unless_configured() -> None:
+    from app.config import Settings
+
+    assert Settings.model_fields["EXTRACTION_FEW_SHOT"].default is False
+

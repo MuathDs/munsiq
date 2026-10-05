@@ -470,6 +470,13 @@ What is built, and where it is weak. Numbers are measured on this machine.
 * **A blank page forces the vision model.** Routing treats a page with no text
   as needing vision, and one such page moves the whole call to the vision
   model. In Results that cost a field against the text path.
+* **QR values are trusted without a sanity check.** On one real receipt the
+  ZATCA QR's timestamp decoded as `0001-01-01`, and that became the issue
+  date, because a decoded QR value is taken as authoritative once its five
+  tags are present and its amounts parse. The model read the printed date,
+  so `QR_MODEL_MISMATCH` flagged the disagreement for review; nothing
+  rejected the impossible date itself. Planned fix: refuse a QR date that
+  cannot be an invoice date and keep the model's reading instead.
 * **Line items come from signed XML only.** The model is not asked for them.
 * **No webhooks, no ERP connectors.** Output is a file the reviewer downloads:
   JSON, XLSX or CSV. Nothing pushes a confirmed invoice to an accounting system

@@ -33,6 +33,7 @@ from app.config import get_settings
 from app.db.session import session_scope
 from app.services import storage as storage_mod
 from app.services.extraction.client import OllamaClient
+from app.services.extraction.fewshot import RECEIPT_EXAMPLES
 from app.services.extraction.grounding import ground_value
 from app.services.extraction.prompts import parse_line_item_schema, parse_schema
 from app.services.extraction.qr_values import apply_deterministic_sources
@@ -270,6 +271,7 @@ async def _process(
             pages=pages,
             page_images=vision_images,
             vision_page_numbers=vision_pages,
+            examples=RECEIPT_EXAMPLES if settings.EXTRACTION_FEW_SHOT else (),
         )
         for p in pages:
             extraction_paths[p.page_number] = "vision" if p.page_number in vision_pages else "text"
