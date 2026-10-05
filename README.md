@@ -113,7 +113,7 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **554 passed, 1 skipped, 1 xfailed — 28m31s** | full `pytest` run against Supabase Postgres 17.6, 2026-09-30. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **596 passed, 1 skipped, 1 xfailed — 27m49s** | full `pytest` run against Supabase Postgres 17.6, 2026-10-05. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **19** (10 blocking errors, 9 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-30 |
 | Validation coverage | **100% statements and branches** — 601 statements, 204 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-30; 165 tests, **6.3 s** without coverage instrumentation — 1.8 s for the rules alone (pure functions), the rest is `test_qr.py` rasterizing and decoding synthetic QR pages |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
@@ -232,6 +232,63 @@ way (`scripts/eval_set.py score --mode auto --qr off|on`, 2026-09-30): QR off
 was read (the scorer reports "read on 1 of 1 document", a count and nothing
 else), and its total and VAT, with the subtotal computed from them, replace
 both misses. Run twice, identical both times. Still n = 1.
+
+### Public receipts: 100 from CORU
+
+The only measurement here on documents this project did not write or choose
+one at a time. CORU / ReceiptSense (Abdallah et al., *ReceiptSense: Beyond
+Traditional OCR - A Dataset for Receipt Understanding*,
+[arXiv:2406.04493](https://arxiv.org/abs/2406.04493); Hugging Face
+`abdoelsayed/CORU`, MIT licence) is a public set of Arabic/English retail
+receipt photos. A fixed sample of 100 (seed 0) with ground truth from its
+Receipt-QA answers, each photo wrapped as a scanned page with no text layer
+and run through the pipeline's own steps. Local Ollama, 2026-10-05; every run,
+its configuration and its commit are in [`docs/results.md`](docs/results.md).
+
+| Field (receipts with ground truth) | Baseline: OCR text path<br/>`qwen2.5:7b-instruct` | Best: vision path<br/>`qwen3.5:4b` |
+| --- | :---: | :---: |
+| Store name, exact (100) | 5% | **62%** |
+| Store name, fuzzy (100) | 22% | **80%** |
+| Date (100) | 79% | **95%** |
+| Receipt number (82) | 2% | **57%** |
+| Subtotal (52) | 50% | **92%** |
+| VAT amount (33) | 52% | **76%** |
+| Total (100) | 81% | **94%** |
+| VAT number (50) | 2% | **68%** |
+| **All fields, exact match (517)** | **41%** | **78%** |
+| Wrong fields a rule flagged | 236 of 306 (77%) | 39 of 112 (35%) |
+| Wrong fields not shown green | 265 of 306 (87%) | 92 of 112 (82%) |
+| Seconds per receipt | 29.2 | 17.2 |
+
+Exact match is after normalization: amounts as Decimals, dates as dates, names
+with case and punctuation folded.
+
+* **The baseline is the OCR text path with no Arabic OCR on this machine.** It
+  is there to show why a page with no text layer is routed to vision, which is
+  what `EXTRACTION_MODE=auto` (the default) already does. The best
+  configuration is therefore the shipped one; nothing was switched.
+* **Vision gets the amounts and the date; names and receipt numbers are
+  weaker.** The store-name ground truth is in Latin script on every receipt,
+  Arabic ones included, so the exact row understates the model and the fuzzy
+  row is given beside it. A receipt often prints several numbers, and any of
+  its transaction or receipt numbers counts as right.
+* **The catch rate drops when the model is fluent.** The text path's errors
+  are mostly missing values, which the required-field rule always catches.
+  Vision's are mostly plausible wrong values, and a rule names only 35% of
+  them; 82% are at least not shown green. 20 wrong fields of 517 looked
+  settled. That is the number a reviewer should worry about.
+* **Two things that did not help.** Two invented few-shot examples in the
+  prompt cut vision from 78% to 43% — the model returned every field null on
+  43 receipts — so `EXTRACTION_FEW_SHOT` stays off. And a larger model on a
+  Colab T4, `qwen3.5:9b`, scored 17% with the same prompt: it returned every
+  field null on 76 receipts, though a bare prompt on ten of those got 27 of 30
+  fields right. The prompt was tuned on small models and the larger one
+  over-obeys its "null is correct" rule; it was not re-tuned against the test
+  set.
+* **These are not the documents the product is for.** Egyptian and Gulf retail
+  receipts carry no signed XML and no ZATCA QR, and their VAT numbers fail the
+  Saudi format rule by design (34 of vision's 77 false alarms). They are a
+  public, checkable stand-in for the hard case: a photographed page.
 
 ## The dashboard
 

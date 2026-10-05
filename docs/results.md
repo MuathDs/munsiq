@@ -100,3 +100,74 @@ lookalike question was left out). 100 receipts, fixed sample, seed 0.
 - False alarms (a rule flagged a correct field): 42 of 224 (19%); without seller_trn: 19 of 201 (9%)
 - Time: 19.9 s per document (100 documents, 0 failed)
 
+## (b) Vision — Colab T4, qwen3.5:9b
+
+- Date: 2026-10-05 · commit: `4e124d0`
+- Dataset: CORU `QA/test`, 100 receipts, seed 0 (`scripts/coru_sample.py`)
+- Model: `qwen3.5:9b` on page images at 100 DPI (num_ctx 4096), REMOTE inference endpoint; temperature 0, seed 0, thinking off
+- Mode: `vision` · few-shot examples: none · QR reading: on
+
+| Field | With ground truth | Correct | Wrong | Missing | Exact match |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 100 | 17 | 7 | 76 | 17% |
+| seller_name, fuzzy (token-set ≥ 85) | 100 | 22 | | | 22% |
+| issue_date | 100 | 24 | 0 | 76 | 24% |
+| invoice_number | 82 | 7 | 4 | 71 | 9% |
+| subtotal | 52 | 9 | 0 | 43 | 17% |
+| vat_amount | 33 | 5 | 2 | 26 | 15% |
+| total_amount | 100 | 22 | 2 | 76 | 22% |
+| seller_trn | 50 | 4 | 0 | 46 | 8% |
+| **All fields** | 517 | 88 | 15 | 414 | **17%** |
+
+- Catch rate (a rule flagged the wrong field): 418 of 429 (97%); without seller_trn: 372 of 383 (97%)
+- Wrong fields not shown green (flagged or amber for any reason): 422 of 429 (98%); without seller_trn: 376 of 383 (98%)
+- False alarms (a rule flagged a correct field): 17 of 88 (19%); without seller_trn: 13 of 84 (15%)
+- Time: 13.7 s per document (100 documents, 0 failed)
+
+## Laptop vs Colab — vision path, same 100 receipts
+
+Written by hand on 2026-10-05 from the two vision runs above; the runs
+themselves are untouched. Same prompt, same 4,096-token context, same 100 DPI
+page images, temperature 0, seed 0, thinking off. Only the model and where it
+ran differ.
+
+| Field | Laptop · `qwen3.5:4b` (4 GB GPU, local) | Colab T4 · `qwen3.5:9b` (remote, through a tunnel) |
+| --- | :---: | :---: |
+| seller_name, exact | 62/100 (62%) | 17/100 (17%) |
+| seller_name, fuzzy | 80/100 (80%) | 22/100 (22%) |
+| issue_date | 95/100 (95%) | 24/100 (24%) |
+| invoice_number | 47/82 (57%) | 7/82 (9%) |
+| subtotal | 48/52 (92%) | 9/52 (17%) |
+| vat_amount | 25/33 (76%) | 5/33 (15%) |
+| total_amount | 94/100 (94%) | 22/100 (22%) |
+| seller_trn | 34/50 (68%) | 4/50 (8%) |
+| **All fields, exact** | **405/517 (78%)** | **88/517 (17%)** |
+| Receipts returned with every field null | 0 | 76 |
+| Wrong fields a rule flagged (catch rate) | 39/112 (35%) | 418/429 (97%) |
+| Wrong fields not shown green | 92/112 (82%) | 422/429 (98%) |
+| False alarms on correct fields | 77/405 (19%) | 17/88 (19%) |
+| Seconds per receipt | 17.2 | 13.7 |
+
+**The larger model did not read worse; it answered "null" to this prompt.** On
+76 of 100 receipts `qwen3.5:9b` returned every field null. Checked, not
+assumed:
+
+- The image arrives. The same request costs 2,006 prompt tokens with the image
+  and 1,005 without it on both models (1,001 tokens for the image either way),
+  and asked a plain question about the picture the 9B model answers it.
+- It is not the context size. The same receipts come back empty at 8,192.
+- It is the prompt. Ten of the receipts the extraction prompt left empty were
+  sent again with a bare three-field request ("return seller_name, issue_date,
+  total_amount as JSON"): 30 of 30 fields filled, 27 of 30 correct.
+
+So the extraction prompt — written and adjusted against the small models, with
+"returning null is CORRECT" and a text fence that says to read the page from
+its image — is over-obeyed by the 9B model. The prompt was NOT changed in
+response: tuning it against the set it is scored on would make the next number
+meaningless. What this run does show is the safety net working: when the model
+returns nothing, 97% of those fields are flagged by a rule and 98% are not
+shown green, so a reviewer is not handed an empty document that looks finished.
+
+Sending these images to Colab did not break the local-only rule for user
+documents: CORU is a public dataset. `backend/.env` was not edited — the tunnel
+URL and model were environment variables on that one command.
