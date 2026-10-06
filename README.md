@@ -113,7 +113,7 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **596 passed, 1 skipped, 1 xfailed — 27m49s** | full `pytest` run against Supabase Postgres 17.6, 2026-10-05. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **596 passed, 1 skipped, 1 xfailed — 26m37s** | full `pytest` run against Supabase Postgres 17.6, 2026-10-06. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **19** (10 blocking errors, 9 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-30 |
 | Validation coverage | **100% statements and branches** — 601 statements, 204 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-30; 165 tests, **6.3 s** without coverage instrumentation — 1.8 s for the rules alone (pure functions), the rest is `test_qr.py` rasterizing and decoding synthetic QR pages |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
@@ -285,6 +285,23 @@ with case and punctuation folded.
   fields right. The prompt was tuned on small models and the larger one
   over-obeys its "null is correct" rule; it was not re-tuned against the test
   set.
+**Laptop vs Colab, vision path, same 100 receipts and settings:**
+
+| | Laptop · `qwen3.5:4b` (4 GB GPU) | Colab T4 · `qwen3.5:9b` |
+| --- | :---: | :---: |
+| All fields, exact match | **405/517 (78%)** | 88/517 (17%) |
+| Date | 95% | 24% |
+| Total | 94% | 22% |
+| Store name, fuzzy | 80% | 22% |
+| Receipts returned with every field null | 0 | 76 |
+| Wrong fields a rule flagged | 35% | 97% |
+| Seconds per receipt | 17.2 | 13.7 |
+
+One line: the larger model did not read worse, it over-obeyed a prompt tuned on
+small models and answered "null" — a bare prompt on ten of its empty receipts
+got 27 of 30 fields right. The investigation is entry 9 of the
+[engineering log](docs/engineering-log.md).
+
 * **These are not the documents the product is for.** Egyptian and Gulf retail
   receipts carry no signed XML and no ZATCA QR, and their VAT numbers fail the
   Saudi format rule by design (34 of vision's 77 false alarms). They are a
@@ -312,38 +329,31 @@ backend through the BFF; nothing is a placeholder.
   languages, and uploading the same file again retries it. A resent invoice
   returns the existing document instead of crashing.
 
-![Dashboard, English](docs/screenshots/dashboard-en.png)
-
-![Dashboard, Arabic — the whole shell mirrors](docs/screenshots/dashboard-ar.png)
-
-![Batch upload](docs/screenshots/upload-en.png)
-
-![History, with search, status filters, per-row export and multi-select](docs/screenshots/history-en.png)
-
-![Templates: the extraction schemas the pipeline reads, read-only](docs/screenshots/templates-en.png)
+![Dashboard: four synthetic invoices, one read from signed XML, one blocked](docs/screenshots/dashboard-en.png)
 
 ## The review workspace
 
 Bilingual, RTL-correct, dark. Provenance is the centrepiece.
 
-**Document A — `ZATCA 4/4`, `Signed XML · no AI`, 18 of 19 values read straight
-from the signed attachment:**
+The header says who read the invoice: one chip per source with the number of
+fields it filled, and a source that found nothing dimmed. Every screenshot here
+is a synthetic invoice.
 
-![Validation workspace, compliant invoice, English](docs/screenshots/workspace-compliant-en.png)
+**Signed XML — `ZATCA 4/4`, `ZATCA XML · 18`, and QR, AI and Derived all at 0.
+The model was never called:**
 
-**The same document in Arabic. The layout mirrors, the labels come from the
-schema, and the page image deliberately does not mirror:**
+![Validation workspace, invoice read from its signed XML](docs/screenshots/workspace-signed-xml-en.png)
 
-![Validation workspace, compliant invoice, Arabic](docs/screenshots/workspace-compliant-ar.png)
+**A simplified receipt — no XML, so the QR on the page supplies five fields
+(`QR code · 5`), the subtotal is derived from the QR's total and VAT
+(`Derived · 1`), and the model reads the rest (`AI · 2`):**
 
-**Document B — no attachment, so the model ran: amber badges with confidence
-bars, `ZATCA 1/1` because the other checks had nothing to check, and
-`GRAND_TOTAL_MISMATCH` pinned above everything with Confirm refused:**
+![Validation workspace, receipt read from its ZATCA QR](docs/screenshots/workspace-qr-receipt-en.png)
 
-![Validation workspace, blocked document, English](docs/screenshots/workspace-blocked-en.png)
-
-**And blocked in Arabic — the rule's message is written in both languages, not
-translated at render time:**
+**Blocked, in Arabic — the model read everything (`ذكاء اصطناعي · 11`), the
+total does not add up, `GRAND_TOTAL_MISMATCH` is pinned above everything with
+its message written in Arabic, and Confirm is refused. The layout mirrors; the
+page image deliberately does not:**
 
 ![Validation workspace, blocked document, Arabic](docs/screenshots/workspace-blocked-ar.png)
 
@@ -436,7 +446,7 @@ cd frontend && npm install && cp .env.local.example .env.local && npm run dev
 
 Then open <http://localhost:3000> — it redirects to the dashboard.
 
-To try your own uploads, generate six varied test invoices (git-ignored, and not
+To try your own uploads, generate eight varied test invoices (git-ignored, and not
 processed — upload them through the UI):
 
 ```bash
@@ -447,7 +457,9 @@ It prints what each should trigger, computed by dry-running the deterministic
 stages on the files it wrote: two carry a signed UBL (English, Arabic-primary) and
 raise nothing; two are digital without one (English, Arabic) and go to the model;
 `05_arithmetic_error.pdf` fires `VAT_CALC_MISMATCH`; `06_invalid_trn.pdf` fires
-`TRN_FORMAT`. The last four need Ollama running. The UBL in them is
+`TRN_FORMAT`; and two are simplified receipts (English, Arabic) with a ZATCA QR
+printed as an image, which supplies five of their fields. The six without a
+signed UBL need Ollama running. The UBL in them is
 ZATCA-*shaped* and read back by the library that built it, so it shows the code
 is self-consistent, not that it reads certified output.
 
@@ -484,7 +496,7 @@ worse than one that says where it stops. Full detail in `CLAUDE.md`.
   unused is a documented next step.
 * **Line items from the model.** They come from the signed XML only.
 
-Bugs found along the way are recorded in `CLAUDE.md`. Two worth naming because
+Bugs found along the way are recorded in `CLAUDE.md`, and the ones worth reading as problem → root cause → fix → evidence are in the [engineering log](docs/engineering-log.md). Two worth naming because
 they were real and are fixed: a byte-identical re-upload used to crash the
 pipeline and orphan a row, and `POST /documents` had never worked end to end —
 the pipeline started before the request's transaction committed, so it could not
@@ -539,15 +551,68 @@ What is built, and where it is weak. Numbers are measured on this machine.
   JSON, XLSX or CSV. Nothing pushes a confirmed invoice to an accounting system
   or notifies one.
 
+## Related work
+
+* **Berghaus et al., *Multi-Modal Vision vs. Text-Based Parsing: Benchmarking
+  LLM Strategies for Invoice Processing***
+  ([arXiv:2509.04469](https://arxiv.org/abs/2509.04469)). Eight multimodal
+  models on three invoice datasets, zero-shot: reading the image directly
+  generally beats converting to markdown first. The same direction as the 41% →
+  78% measured here on photographed receipts, at a very different model size.
+* **Abdallah et al., *AMuRD: Annotated Arabic-English Receipt Dataset for Key
+  Information Extraction and Classification***
+  ([arXiv:2309.09800](https://arxiv.org/abs/2309.09800)). 47,720 annotated
+  samples for item-level extraction and classification, with fine-tuned LLaMA
+  baselines.
+* **Abdallah et al., *ReceiptSense: Beyond Traditional OCR - A Dataset for
+  Receipt Understanding*** (CORU,
+  [arXiv:2406.04493](https://arxiv.org/abs/2406.04493)). 20,000 annotated
+  receipts, 30,000 OCR-annotated images, 10,000 item annotations and a 1,265-
+  receipt QA subset. The set scored in [Results](#results).
+* **Heakl et al., *KITAB-Bench: A Comprehensive Multi-Domain Benchmark for
+  Arabic OCR and Document Understanding***
+  ([arXiv:2502.14949](https://arxiv.org/abs/2502.14949), ACL 2025). 8,809
+  samples across nine domains; vision-language models beat traditional OCR
+  engines on Arabic by a wide margin in character error rate.
+* **Wasfy et al., *QARI-OCR: High-Fidelity Arabic Text Recognition through
+  Multimodal Large Language Model Adaptation***
+  ([arXiv:2506.02295](https://arxiv.org/abs/2506.02295)). Qwen2-VL-2B
+  fine-tuned for Arabic OCR — the kind of model that would close the Arabic
+  OCR gap in [Known limitations](#known-limitations).
+
+How Munsiq differs:
+
+1. **It reads before it guesses.** A compliant Saudi invoice carries its answer
+   as signed XML or a ZATCA QR; those are decoded deterministically and the
+   model never overrides them. The benchmarks above measure models on pixels.
+2. **Model output is treated as untrusted.** Every field carries its provenance
+   and passes deterministic rules, and the number reported next to accuracy is
+   how many of the wrong fields those rules caught.
+3. **It is a working system on a 4 GB laptop GPU**, with small open models, a
+   bilingual review workspace and tenant isolation in the database — not a
+   benchmark, and measured on that hardware.
+
+## Future work
+
+* **Sanity-check QR values.** Refuse a QR date that cannot be an invoice date
+  (one real receipt's decoded as `0001-01-01`) and keep the model's reading.
+* **Calibrate the prompt for larger models, on a separate development set.**
+  `qwen3.5:9b` over-obeys the "null is correct" rule and scores 17% where the
+  4B model scores 78%. The fix has to be tuned on receipts that are not the
+  100 it is then scored on.
+* **Fine-tune on CORU.** Its training splits are public and MIT-licensed; the
+  100-receipt sample used here stays held out.
+
 ## Layout
 
 ```
 backend/     FastAPI, SQLAlchemy 2.0 async, Alembic, the pipeline and rules
 frontend/    Next.js 16 App Router, TypeScript strict, Tailwind, BFF routes
 docs/        db.md · ingestion.md · validation.md · demo.md · adr/ · screenshots/
+             results.md (every measured run) · engineering-log.md
              design-handoff/ (the original dashboard design) · legacy/
-samples/     real invoices, git-ignored — never committed; test/ is generated;
-             eval/ holds hand-entered ground truth, also git-ignored
+samples/     git-ignored — nothing in it is committed; test/ is generated;
+             eval/ holds ground truth and the public CORU sample
 legacy/      the pre-Munsiq prototype: pandas → Excel reporter, fine-tune notebook
              (not maintained; see legacy/README.md)
 ```

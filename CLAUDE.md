@@ -399,6 +399,42 @@ FIXED, and worth remembering why:
   both paths at a Colab Ollama behind a Cloudflare tunnel; that sent page text
   and page images off this machine. Those keys are commented out and both
   paths use `http://localhost:11434`. See the hard rule below.
+- **Measured on public receipts (CORU), and what did not help** (2026-10-05).
+  `scripts/coru_sample.py` draws a fixed 100-receipt sample (seed 0) of CORU /
+  ReceiptSense (arXiv:2406.04493, MIT); only its Receipt-QA split has
+  receipt-level text ground truth, so each field maps to a family of question
+  wordings. `scripts/coru_eval.py` wraps each photo as a scanned page and runs
+  the pipeline's own steps without the database; every run appends itself to
+  `docs/results.md`. Local results, 517 scored fields: OCR text path 41%
+  (the baseline — no Arabic OCR on this machine), vision path 78%. The shipped
+  default (`EXTRACTION_MODE=auto`) already routes such pages to vision, so
+  nothing was switched. Two things that did NOT help, both recorded rather
+  than tuned away: `EXTRACTION_FEW_SHOT` (two invented receipts in the prompt,
+  default off) cut vision to 43% — every field null on 43 receipts; and
+  `qwen3.5:9b` on a Colab T4 scored 17% — every field null on 76 receipts,
+  although the image arrives (same 1,001 image tokens), a larger context
+  changes nothing, and a bare prompt on ten of those receipts got 27 of 30
+  fields right. The prompt was tuned on small models and the larger one
+  over-obeys "null is correct". RULE: do not tune the prompt against the
+  receipts it is scored on; calibrate on a separate development set. Found
+  while building it: 48 of 100 photos are stored sideways with an EXIF rotate
+  flag, and embedding the raw JPEG in a PDF ignores it
+  (`test_a_photo_stored_sideways_is_turned_upright`). The catch rate needs
+  care: it is high when errors are missing values (the required-field rule
+  always fires) and only 35% when vision returns plausible wrong values.
+- **The demo org holds synthetic invoices only** (since 2026-10-06). Every
+  earlier document, the real ones included, was deleted with its stored files,
+  along with the eval set built on the real contractor invoice — so the
+  real-invoice figures in the README are dated records that can no longer be
+  re-run from this database. Screenshots in `docs/screenshots/` are safe to
+  recapture.
+- **The 7B text model stopped loading on this machine** (seen 2026-10-06, not
+  diagnosed). Ollama reports a CUDA out-of-memory error loading
+  `qwen2.5:7b-instruct` with 12 of 29 layers offloaded and about 3.3 GB free;
+  it loaded the day before. `qwen3.5:4b` loads. Restarting the Ollama app is
+  the first thing to try. Until then the text path fails with a clear
+  InferenceError; the demo documents were seeded with
+  `INFERENCE_MODEL=qwen3.5:4b` as a one-command override.
 - **The prompt cache changes results.** The same prompt gave `Riyal (SAR)` cold and
   `Riyal (R. s)` with the previous request's 1,141 tokens cached, five runs each,
   and a fixed seed changed nothing (greedy decoding). Consecutive documents share

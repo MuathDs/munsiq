@@ -12,8 +12,8 @@ cd backend
 .venv/Scripts/python.exe -m scripts.seed_demo_documents
 ```
 
-Everything below is what these two documents actually do. Screenshots of both, in
-both languages, are in [`screenshots/`](screenshots/).
+Everything below is what these two documents actually do. Screenshots are in
+[`screenshots/`](screenshots/); every one shows synthetic invoices.
 
 ---
 
@@ -23,22 +23,24 @@ both languages, are in [`screenshots/`](screenshots/).
 used). Switch with the link at the bottom of the sidebar.
 
 Every number on it is computed from the data, and a card the data cannot support is
-not shown at all. On the seeded demo organization it reads **4 processed**,
-**2 awaiting review (1 blocked by validation)**, **2 of 4 read from signed XML**,
-and **100% extraction accuracy — 18 of 18 fields kept as extracted across 2
-confirmed invoices**. That last card only exists because two invoices have been
-confirmed; on a fresh organization it is absent rather than showing a dash.
+not shown at all. With the two seed documents plus two of the generated test
+invoices uploaded (the Arabic invoice and the QR receipt, as in the screenshot)
+it reads **4 processed**, **4 awaiting review (1 blocked by validation)** and
+**1 of 4 read from signed XML**. There is no *extraction accuracy* card: it only
+appears once an invoice has been confirmed, rather than showing a dash.
 
 > The sidebar shows the real organization, its VAT number included. The prototype
 > this shell came from said "Jordan Diaz · Finance Ops".
 
 Point at the table: each row says where its values came from — *Signed XML* or
-*AI · qwen2.5:7b-instruct* — and what state it is in. Click the row for document A.
+*AI ·* and the model's name — and what state it is in. Click the row for document A.
 
 ## 0:15 — Document A, the compliant invoice
 
-The header says it before anything else: **ZATCA 4/4** and **Signed XML · no
-AI**. This invoice carried its own UBL attachment, so no model ran on it.
+The header says it before anything else: **ZATCA 4/4** and one chip per source
+with the fields it filled — **ZATCA XML · 18**, with *QR code*, *AI* and
+*Derived* dimmed at 0. This invoice carried its own UBL attachment, so no model
+ran on it.
 
 The field pane summary reads **18 Verified (XML), 1 Not extracted** out of 19.
 Every green badge is a value read from the signed attachment:
@@ -76,10 +78,9 @@ top-left is its top-left in either language.
 
 Back on the dashboard, click the *Blocked* row: invoice `EPS-2026-1187`.
 
-* **Signed XML · no AI** is gone; this one says **AI · qwen2.5:7b-instruct**. No
-  attachment, so the model ran (164.9 s for this document).
-* All 11 badges are amber, *Extracted (AI)*, each with a **confidence bar**
-  (values between 0.857 and 1.000).
+* The chips have flipped: **AI · 11**, and *ZATCA XML* dimmed at 0. No
+  attachment, so the model ran.
+* All 11 badges are amber, *Extracted (AI)*, each with a **confidence bar**.
 * The compliance chip reads **ZATCA 1/1**, not 4/4. Only the VAT-number format
   check had anything to check: with no attachment there is no embedded UBL and
   no QR to decode. A check that never ran is not reported as passed.
@@ -128,14 +129,15 @@ and English.
 
 ## Optional: upload your own
 
-Generate six varied invoices and drop them on **Batch Upload**:
+Generate eight varied invoices and drop them on **Batch Upload**:
 
 ```bash
 cd backend && .venv/Scripts/python.exe -m scripts.make_test_invoices
 ```
 
 The script prints what each should trigger. The two with a signed UBL are read
-without the model; the four digital ones need Ollama running. Progress while a
+without the model; the other six need Ollama running, and the two receipts
+among them get five fields from the ZATCA QR printed on the page. Progress while a
 file uploads is measured from the browser; after that a row shows an elapsed timer
 (the pipeline reports no percentages). Drop the same file twice and the second
 answers "Already uploaded — this is the existing document" instead of crashing.
