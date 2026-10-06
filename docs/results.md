@@ -243,3 +243,88 @@ URL and model were environment variables on that one command.
 - False alarms (a rule flagged a correct field): 80 of 410 (20%); without seller_trn: 45 of 375 (12%)
 - Time: 16.1 s per document (100 documents, 0 failed)
 
+## Test · prompt v2 · Vision — local, qwen3.5:4b
+
+- Date: 2026-10-06 · commit: `5ad331b`
+- Dataset: CORU `QA/test`, the held-out TEST sample (seed 0), 100 receipts (`scripts/coru_sample.py`)
+- Model: `qwen3.5:4b` on page images at 100 DPI (num_ctx 4096), local Ollama; temperature 0, seed 0, thinking off
+- Mode: `vision` · prompt v2 · few-shot examples: none · QR reading: on
+
+| Field | With ground truth | Correct | Wrong | Missing | Exact match |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 100 | 58 | 42 | 0 | 58% |
+| seller_name, fuzzy (token-set ≥ 85) | 100 | 76 | | | 76% |
+| issue_date | 100 | 96 | 4 | 0 | 96% |
+| invoice_number | 82 | 51 | 30 | 1 | 62% |
+| subtotal | 52 | 47 | 5 | 0 | 90% |
+| vat_amount | 33 | 25 | 8 | 0 | 76% |
+| total_amount | 100 | 91 | 9 | 0 | 91% |
+| seller_trn | 50 | 35 | 2 | 13 | 70% |
+| **All fields** | 517 | 403 | 100 | 14 | **78%** |
+
+- Catch rate (a rule flagged the wrong field): 37 of 114 (32%); without seller_trn: 22 of 99 (22%)
+- Wrong fields not shown green (flagged or amber for any reason): 92 of 114 (81%); without seller_trn: 77 of 99 (78%)
+- False alarms (a rule flagged a correct field): 81 of 403 (20%); without seller_trn: 46 of 368 (12%)
+- Time: 22.4 s per document (100 documents, 0 failed)
+
+## Old prompt vs new prompt — both models, the 100-receipt test sample
+
+Written by hand on 2026-10-06 from the runs above; the runs themselves are
+untouched. Prompt version 2 was calibrated on the DEV sample only (50 receipts,
+seed 1, no receipt shared with the test sample): baseline 52/263 (20%) under
+version 1, 211/263 (80%) after one iteration, both with `qwen3.5:9b`. One
+iteration of the four allowed — what remained on the dev sample was misread
+digits and naming style, not instruction-following, and more wording changes
+would have fitted the prompt to this dataset's labelling habits. The test
+sample was then scored once per model, from a clean commit.
+
+| Field | 4B laptop · v1 | 4B laptop · v2 | 9B Colab · v1 | 9B Colab · v2 |
+| --- | :---: | :---: | :---: | :---: |
+| seller_name, exact | 62/100 | 58/100 | 17/100 | 74/100 |
+| seller_name, fuzzy | 80/100 | 76/100 | 22/100 | 90/100 |
+| issue_date | 95/100 | 96/100 | 24/100 | 96/100 |
+| invoice_number | 47/82 | 51/82 | 7/82 | 36/82 |
+| subtotal | 48/52 | 47/52 | 9/52 | 49/52 |
+| vat_amount | 25/33 | 25/33 | 5/33 | 27/33 |
+| total_amount | 94/100 | 91/100 | 22/100 | 93/100 |
+| seller_trn | 34/50 | 35/50 | 4/50 | 35/50 |
+| **All fields, exact** | **405/517 (78.3%)** | **403/517 (77.9%)** | **88/517 (17.0%)** | **410/517 (79.3%)** |
+| Receipts with every field null | 0 | 0 | 76 | 0 |
+| Wrong fields (wrong value + missing) | 112 (91 + 21) | 114 (100 + 14) | 429 (15 + 414) | 107 (83 + 24) |
+| …that a rule flagged | 39 (35%) | 37 (32%) | 418 (97%) | 44 (41%) |
+| …that LOOKED SETTLED (not flagged, shown green) | **20** | **22** | **7** | **15** |
+| Seconds per receipt | 17.2 | 22.4 | 13.7 | 16.1 |
+
+What it says:
+
+- **The larger model's 17% was the prompt.** Under version 2 it scores 79.3%,
+  and returns an empty receipt 0 times instead of 76.
+- **The small model did not gain, and lost two fields.** 405 → 403 of 517. Not
+  hidden: version 2 is not better for the 4B model on this sample, it is the
+  same within two fields, and it is the version both models can follow.
+- **Fewer empty answers means more wrong-but-settled ones.** The 9B model's
+  count rises from 7 to 15, because under version 1 nearly all of its errors
+  were missing values, which the required-field rule always catches. Every
+  settled-looking wrong field, in all four runs, is a store name or a receipt
+  number; no amount and no date among them.
+- **Seconds per receipt are not a prompt comparison.** The two 4B runs were a
+  day apart on a laptop with other load; the two 9B runs were on different
+  Colab sessions.
+
+Regression on the eight synthetic invoices (`scripts/benchmark.py`, QR off,
+88 fields; `false` is a value invented where none is printed):
+
+| | v1 | v2 | invented values, v1 → v2 |
+| --- | :---: | :---: | :---: |
+| `qwen2.5:7b-instruct`, text path, laptop | 86/88 | 85/88 | 0 → 0 |
+| `qwen3.5:4b`, vision path, laptop | 76/88 | 80/88 | 1 → 1 |
+| `qwen3.5:9b`, vision path, Colab | 80/88 | 88/88 | 0 → 0 |
+
+The text path's one lost field is `currency`, on one invoice — a field already
+recorded as sensitive to prompt and cache state. The vision gains are the
+subtotal and total on the two receipts. Version 2 invented nothing that
+version 1 did not.
+
+`EXTRACTION_PROMPT_VERSION` defaults to 2 from this point; 1 stays selectable,
+so every earlier number can be reproduced under the prompt it was measured
+with.

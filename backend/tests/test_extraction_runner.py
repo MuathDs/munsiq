@@ -338,9 +338,11 @@ def test_vision_pages_are_passed_as_images_to_the_client() -> None:
     assert client.calls  # sanity: chat was actually invoked
 
 
-def test_a_vision_page_gets_a_marker_not_its_raw_text_in_the_prompt() -> None:
+@pytest.mark.parametrize("version", [1, 2])
+def test_a_vision_page_gets_a_marker_not_its_raw_text_in_the_prompt(version: int) -> None:
     """A page routed to vision has unreliable text — that text must not be
-    inlined into the prompt the text-capable reading is skipping past."""
+    inlined into the prompt the text-capable reading is skipping past. True of
+    both prompt versions; they differ only in WHERE the image is announced."""
     fragmented = PageText(
         page_number=1, source=TextSource.TEXT_LAYER, text="THIS-TEXT-IS-UNRELIABLE-GARBLE"
     )
@@ -351,13 +353,15 @@ def test_a_vision_page_gets_a_marker_not_its_raw_text_in_the_prompt() -> None:
         pages=[fragmented],
         page_images=[b"fake-webp-bytes"],
         vision_page_numbers=frozenset({1}),
+        prompt_version=version,
     )
     prompt = client.calls[0]["user"]
     assert "THIS-TEXT-IS-UNRELIABLE-GARBLE" not in prompt
-    assert "attached image" in prompt
+    assert "attached" in prompt and "image" in prompt
 
 
-def test_a_mixed_document_inlines_the_text_page_and_marks_the_vision_page() -> None:
+@pytest.mark.parametrize("version", [1, 2])
+def test_a_mixed_document_inlines_the_text_page_and_marks_the_vision_page(version: int) -> None:
     text_page = PageText(page_number=1, source=TextSource.TEXT_LAYER, text="Invoice SA-2026-0334")
     vision_page = PageText(page_number=2, source=TextSource.OCR_UNSUPPORTED_SCRIPT)
     client = FakeClient({"invoice_number": "SA-2026-0334"})
@@ -367,10 +371,11 @@ def test_a_mixed_document_inlines_the_text_page_and_marks_the_vision_page() -> N
         pages=[text_page, vision_page],
         page_images=[b"fake-webp-bytes"],
         vision_page_numbers=frozenset({2}),
+        prompt_version=version,
     )
     prompt = client.calls[0]["user"]
     assert "Invoice SA-2026-0334" in prompt
-    assert "page 2" in prompt and "attached image" in prompt
+    assert "page 2" in prompt.lower() and "attached" in prompt and "image" in prompt
 
 
 def test_a_text_only_call_still_gets_no_images_key() -> None:
@@ -577,10 +582,11 @@ def test_an_unknown_prompt_version_is_refused() -> None:
 def test_the_prompt_version_comes_from_settings_unless_given(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from app.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "EXTRACTION_PROMPT_VERSION", 2)
-    client = FakeClient({"invoice_number": "X-1"})
-    run_extraction(client=client, fields=FIELDS, pages=[PAGE])
-    assert client.calls[0]["system"] == system_prompt(2)
+    for version in (1, 2):
+        monkeypatch.setattr(get_settings(), "EXTRACTION_PROMPT_VERSION", version)
+        client = FakeClient({"invoice_number": "X-1"})
+        run_extraction(client=client, fields=FIELDS, pages=[PAGE])
+        assert client.calls[0]["system"] == system_prompt(version)
 
 
 def test_the_prompt_version_can_be_set_from_the_environment() -> None:
@@ -590,6 +596,6 @@ def test_the_prompt_version_can_be_set_from_the_environment() -> None:
     from app.config import Settings
 
     assert Settings(EXTRACTION_PROMPT_VERSION="2").EXTRACTION_PROMPT_VERSION == 2  # type: ignore[arg-type]
-    assert Settings.model_fields["EXTRACTION_PROMPT_VERSION"].default == 1
+    assert Settings.model_fields["EXTRACTION_PROMPT_VERSION"].default == 2
     with pytest.raises(ValidationError):
         Settings(EXTRACTION_PROMPT_VERSION="3")  # type: ignore[arg-type]

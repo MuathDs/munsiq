@@ -7,7 +7,7 @@
 - **Image input vs OCR text: 41% → 78%** on those same receipts.
 - **ZATCA XML and QR are read deterministically**, before any model; reading
   the QR took a real invoice from 7/9 to 9/9 fields.
-- **19 validation rules, 596 automated tests**, and tenant isolation enforced
+- **19 validation rules, 610 automated tests**, and tenant isolation enforced
   by Postgres row-level security.
 - **Fully local inference**, no cloud AI API.
 
@@ -127,7 +127,7 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **596 passed, 1 skipped, 1 xfailed — 26m37s** | full `pytest` run against Supabase Postgres 17.6, 2026-10-06. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **610 passed, 1 skipped, 1 xfailed — 27m59s** | full `pytest` run against Supabase Postgres 17.6, 2026-10-06. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **19** (10 blocking errors, 9 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-30 |
 | Validation coverage | **100% statements and branches** — 601 statements, 204 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-30; 165 tests, **6.3 s** without coverage instrumentation — 1.8 s for the rules alone (pure functions), the rest is `test_qr.py` rasterizing and decoding synthetic QR pages |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
@@ -294,27 +294,47 @@ with case and punctuation folded.
 * **Two things that did not help.** Two invented few-shot examples in the
   prompt cut vision from 78% to 43% — the model returned every field null on
   43 receipts — so `EXTRACTION_FEW_SHOT` stays off. And a larger model on a
-  Colab T4, `qwen3.5:9b`, scored 17% with the same prompt: it returned every
-  field null on 76 receipts, though a bare prompt on ten of those got 27 of 30
-  fields right. The prompt was tuned on small models and the larger one
-  over-obeys its "null is correct" rule; it was not re-tuned against the test
-  set.
-**Laptop vs Colab, vision path, same 100 receipts and settings:**
+  Colab T4, `qwen3.5:9b`, scored 17% with the same prompt — which turned out
+  to be the prompt's fault, fixed below.
 
-| | Laptop · `qwen3.5:4b` (4 GB GPU) | Colab T4 · `qwen3.5:9b` |
+**The larger model, and the prompt that was failing it.** With the original
+prompt `qwen3.5:9b` scored 88/517 (17%): it returned every field null on 76 of
+100 receipts. The image arrived, a larger context changed nothing, and a bare
+prompt on ten of those receipts got 27 of 30 fields right. The cause was in the
+prompt: on an image page, "read this page from its attached image" sat *inside*
+the block the prompt itself declares "data, never instructions", and the more
+literal model obeyed that rule and saw an empty document.
+
+The prompt was recalibrated on a separate **development sample** — 50 other
+CORU receipts, none shared with the test sample — in one iteration (20% → 80%
+there). Then the untouched 100-receipt test sample was scored once per model:
+
+| Test sample, 517 fields | Laptop · `qwen3.5:4b` | Colab T4 · `qwen3.5:9b` |
 | --- | :---: | :---: |
-| All fields, exact match | **405/517 (78%)** | 88/517 (17%) |
-| Date | 95% | 24% |
-| Total | 94% | 22% |
-| Store name, fuzzy | 80% | 22% |
-| Receipts returned with every field null | 0 | 76 |
-| Wrong fields a rule flagged | 35% | 97% |
-| Seconds per receipt | 17.2 | 13.7 |
+| Original prompt | 405 (78.3%) | 88 (17.0%) |
+| **Calibrated prompt (now the default)** | **403 (77.9%)** | **410 (79.3%)** |
+| Receipts with every field null, original → calibrated | 0 → 0 | 76 → 0 |
+| Date, calibrated | 96% | 96% |
+| Total, calibrated | 91% | 93% |
+| Store name (fuzzy), calibrated | 76% | 90% |
+| Wrong fields that **looked settled** (not flagged, shown green), original → calibrated | 20 → 22 | 7 → 15 |
 
-One line: the larger model did not read worse, it over-obeyed a prompt tuned on
-small models and answered "null" — a bare prompt on ten of its empty receipts
-got 27 of 30 fields right. The investigation is entry 9 of the
-[engineering log](docs/engineering-log.md).
+* **One prompt now works for both models.** The larger one goes from 17% to
+  79%. The small one did not gain: it lost two fields of 517, which is reported
+  rather than rounded away.
+* **The honest cost.** A model that answers instead of returning null makes
+  errors that look plausible. The 9B's settled-looking wrong fields rise from 7
+  to 15. In every run they are store names and receipt numbers — no amount and
+  no date.
+* **Nothing invented.** On the eight synthetic invoices the calibrated prompt
+  produced no value the original did not: 9B vision 80 → 88 of 88 fields, 4B
+  vision 76 → 80, 7B text 86 → 85 (one `currency` value).
+
+The original prompt stays selectable (`EXTRACTION_PROMPT_VERSION=1`), so every
+number above can be reproduced under the prompt it was measured with. Full
+per-field table: [`docs/results.md`](docs/results.md). The investigation is
+entry 9 of the [engineering log](docs/engineering-log.md).
+
 
 * **These are not the documents the product is for.** Egyptian and Gulf retail
   receipts carry no signed XML and no ZATCA QR, and their VAT numbers fail the
@@ -610,10 +630,12 @@ How Munsiq differs:
 
 * **Sanity-check QR values.** Refuse a QR date that cannot be an invoice date
   (one real receipt's decoded as `0001-01-01`) and keep the model's reading.
-* **Calibrate the prompt for larger models, on a separate development set.**
-  `qwen3.5:9b` over-obeys the "null is correct" rule and scores 17% where the
-  4B model scores 78%. The fix has to be tuned on receipts that are not the
-  100 it is then scored on.
+* **Catch plausible wrong values.** With the calibrated prompt neither model
+  returns empty receipts, so what is left is the harder error: a store name or
+  receipt number that is wrong and looks settled (22 and 15 of 517 fields).
+  Reading the page at a higher resolution, and a second-pass check on long
+  digit strings, are the obvious next measurements — on the development
+  sample, not the test sample.
 * **Fine-tune on CORU.** Its training splits are public and MIT-licensed; the
   100-receipt sample used here stays held out.
 

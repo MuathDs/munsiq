@@ -105,7 +105,11 @@ class Settings(BaseSettings):
     # 1 is the original; 2 was calibrated on a development sample that shares
     # no receipt with the scored test sample. Both stay runnable so a result can
     # always be reproduced with the prompt it was measured under.
-    EXTRACTION_PROMPT_VERSION: int = Field(default=1, ge=1, le=2)
+    #
+    # 2 is the default since 2026-10-06, measured on the 100-receipt CORU test
+    # sample (docs/results.md): qwen3.5:9b 17% -> 79%, qwen3.5:4b 78.3% -> 77.9%
+    # (two fields of 517). One prompt that both models can follow.
+    EXTRACTION_PROMPT_VERSION: int = Field(default=2, ge=1, le=2)
 
     # Deliberately a SEPARATE model, base URL and context size from the text
     # settings above, not a flag on the same client: a heavier VL model

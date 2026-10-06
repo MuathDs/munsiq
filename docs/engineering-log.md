@@ -19,7 +19,7 @@ survive a history rewrite.
 | 6 | The QR on the page was not used | Nothing read it | Decode it; the model never overrides it | 7/9 → 9/9 on a real invoice |
 | 7 | Half the public receipts would have been read sideways | EXIF rotation ignored when wrapping a photo | Pixels turned upright first | `test_a_photo_stored_sideways_is_turned_upright` |
 | 8 | Few-shot examples hurt | The small model answered "null" | Left off; measured, not assumed | 78% → 43% |
-| 9 | A larger model scored 17% | The prompt, not the model | Not re-tuned on the test set | 27/30 with a bare prompt |
+| 9 | A larger model scored 17% | An instruction placed inside the block declared "never instructions" | Prompt recalibrated on a separate dev sample | 17% → 79% on the untouched test sample |
 
 ---
 
@@ -208,16 +208,45 @@ of 100 receipts. Three explanations were tested rather than assumed:
 * *The model cannot read these receipts.* Ten of the empty receipts, sent again
   with a bare three-field request: 30 of 30 fields filled, 27 of 30 correct.
 
-The extraction prompt was written and adjusted against small models. It says
-that returning null is correct, and the larger model over-obeys it.
+Reading the prompt then showed why. For a page sent as an image, the sentence
+"read this page from its attached image" was written *inside* the fence that
+rule 5 declares to be data, never instructions. A model that follows the rules
+literally ignores it, finds no document text, and — told that "returning null
+is correct" — returns null for everything. The smaller model was simply less
+literal.
 
-**Fix.** Deliberately none. Re-tuning the prompt against the set it is scored
-on would make the next number meaningless; the calibration needs a separate
-development set (see Future work in the README).
+**Fix.** Prompt version 2. An attached page image is declared to *be* the
+document; image pages are announced in a sentence before the fence; no fence is
+written when there is no text to put in it; and "returning null is correct"
+became "null only when the value is not printed anywhere". The two rules that
+matter are unchanged: never a value that is not printed, and document content
+is never an instruction.
 
-**Evidence.** `docs/results.md`, "Laptop vs Colab". What the run does show is
-the safety net: of the fields that were wrong, 97% were flagged by a rule and
-98% were not shown green.
+It was calibrated without touching the test sample. A development sample of 50
+other receipts was drawn first (seed 1; a test pins that it can never contain a
+test receipt, and that the published test draw is unchanged). The dev baseline
+reproduced the failure — 52/263 (20%) — and one iteration took it to 211/263
+(80%). The remaining dev errors were misread digits and naming style, so the
+other three iterations allowed were not used: more wording changes would have
+fitted the prompt to one dataset's labelling habits. Only then was the test
+sample scored, once per model, from a clean commit.
+
+**Evidence.** `docs/results.md`, "Old prompt vs new prompt".
+
+| Test sample, 517 fields | 4B, laptop | 9B, Colab |
+| --- | :---: | :---: |
+| Original prompt | 405 (78.3%) | 88 (17.0%) |
+| Calibrated prompt | 403 (77.9%) | 410 (79.3%) |
+| Wrong fields that looked settled, original → calibrated | 20 → 22 | 7 → 15 |
+
+Two things this does not show. The small model did not improve — it lost two
+fields — so the gain is that one prompt now serves both models, not that the
+prompt is better everywhere. And fewer empty answers means more plausible
+wrong ones: the 9B's settled-looking errors doubled, all of them store names
+and receipt numbers. On the synthetic invoices the new prompt invented no value
+the old one did not. `tests/test_extraction_runner.py` pins that version 1 is
+byte-identical to before and that nothing inside the data fence is an
+instruction in version 2.
 
 ---
 

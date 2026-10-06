@@ -422,6 +422,27 @@ FIXED, and worth remembering why:
   (`test_a_photo_stored_sideways_is_turned_upright`). The catch rate needs
   care: it is high when errors are missing values (the required-field rule
   always fires) and only 35% when vision returns plausible wrong values.
+- **The 9B model's 17% was an instruction inside the data fence** (fixed
+  2026-10-06). Prompt v1 wrote "read this page from its attached image" inside
+  the region rule 5 declares data-never-instructions; a literal model ignored
+  it and returned null for everything. Prompt v2 (`prompts.SYSTEM_PROMPT_V2`,
+  `EXTRACTION_PROMPT_VERSION`, default 2, 1 still selectable) declares an
+  attached image to BE the document, announces image pages before the fence,
+  writes no fence when there is no text, and says null only when the value is
+  not printed anywhere. Calibrated on a DEV sample (`coru_sample.py --split
+  dev`: 50 receipts, seed 1, disjoint from the test sample by construction and
+  by test) in one iteration, 20% → 80%; then the test sample was scored once
+  per model: `qwen3.5:9b` 88 → 410 of 517, `qwen3.5:4b` 405 → 403. The small
+  model did not gain. Wrong fields that looked settled: 4B 20 → 22, 9B 7 → 15,
+  all store names and receipt numbers. RULE, restated: nothing inside the
+  DOCUMENT fence may be an instruction, and prompts are tuned on the dev
+  sample only. `tests/test_extraction_runner.py` (section 7).
+- **The laptop GPU refused every allocation until a reboot** (2026-10-06).
+  What looked like the 7B model no longer fitting (entry below) was the whole
+  GPU: even 4 layers of the 4B model failed with CUDA out-of-memory at 3.3 GB
+  free, while CPU-only loading worked. Restarting Ollama and freeing RAM did
+  not help; a reboot did. If a model that loaded yesterday reports CUDA OOM
+  with VRAM free, reboot before debugging anything else.
 - **The demo org holds synthetic invoices only** (since 2026-10-06). Every
   earlier document, the real ones included, was deleted with its stored files,
   along with the eval set built on the real contractor invoice — so the
