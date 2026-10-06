@@ -30,7 +30,7 @@ lookalike question was left out). 100 receipts, fixed sample, seed 0.
 
 ## (a) OCR text path (no Arabic OCR on this machine) — local
 
-- Date: 2026-10-05 · commit: `f5913a5`
+- Date: 2026-10-05 · commit: `8d93153`
 - Dataset: CORU `QA/test`, 100 receipts, seed 0 (`scripts/coru_sample.py`)
 - Model: `qwen2.5:7b-instruct` on OCR text (num_ctx 4096), local Ollama; temperature 0, seed 0, thinking off
 - Mode: `text` · few-shot examples: none · QR reading: on
@@ -54,7 +54,7 @@ lookalike question was left out). 100 receipts, fixed sample, seed 0.
 
 ## (b) Vision — local
 
-- Date: 2026-10-05 · commit: `f5913a5`
+- Date: 2026-10-05 · commit: `8d93153`
 - Dataset: CORU `QA/test`, 100 receipts, seed 0 (`scripts/coru_sample.py`)
 - Model: `qwen3.5:4b` on page images at 100 DPI (num_ctx 4096), local Ollama; temperature 0, seed 0, thinking off
 - Mode: `vision` · few-shot examples: none · QR reading: on
@@ -78,7 +78,7 @@ lookalike question was left out). 100 receipts, fixed sample, seed 0.
 
 ## (c) Vision + 2 synthetic few-shot examples — local
 
-- Date: 2026-10-05 · commit: `f5913a5`
+- Date: 2026-10-05 · commit: `8d93153`
 - Dataset: CORU `QA/test`, 100 receipts, seed 0 (`scripts/coru_sample.py`)
 - Model: `qwen3.5:4b` on page images at 100 DPI (num_ctx 4096), local Ollama; temperature 0, seed 0, thinking off
 - Mode: `vision` · few-shot examples: 2 synthetic · QR reading: on
@@ -102,7 +102,7 @@ lookalike question was left out). 100 receipts, fixed sample, seed 0.
 
 ## (b) Vision — Colab T4, qwen3.5:9b
 
-- Date: 2026-10-05 · commit: `4e124d0`
+- Date: 2026-10-05 · commit: `8104db2`
 - Dataset: CORU `QA/test`, 100 receipts, seed 0 (`scripts/coru_sample.py`)
 - Model: `qwen3.5:9b` on page images at 100 DPI (num_ctx 4096), REMOTE inference endpoint; temperature 0, seed 0, thinking off
 - Mode: `vision` · few-shot examples: none · QR reading: on
