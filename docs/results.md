@@ -219,3 +219,27 @@ URL and model were environment variables on that one command.
 - False alarms (a rule flagged a correct field): 45 of 211 (21%); without seller_trn: 25 of 191 (13%)
 - Time: 16.0 s per document (50 documents, 0 failed)
 
+## Test · prompt v2 · Vision — Colab T4, qwen3.5:9b
+
+- Date: 2026-10-06 · commit: `8fc0da6`
+- Dataset: CORU `QA/test`, the held-out TEST sample (seed 0), 100 receipts (`scripts/coru_sample.py`)
+- Model: `qwen3.5:9b` on page images at 100 DPI (num_ctx 4096), REMOTE inference endpoint; temperature 0, seed 0, thinking off
+- Mode: `vision` · prompt v2 · few-shot examples: none · QR reading: on
+
+| Field | With ground truth | Correct | Wrong | Missing | Exact match |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 100 | 74 | 25 | 1 | 74% |
+| seller_name, fuzzy (token-set ≥ 85) | 100 | 90 | | | 90% |
+| issue_date | 100 | 96 | 4 | 0 | 96% |
+| invoice_number | 82 | 36 | 34 | 12 | 44% |
+| subtotal | 52 | 49 | 3 | 0 | 94% |
+| vat_amount | 33 | 27 | 6 | 0 | 82% |
+| total_amount | 100 | 93 | 7 | 0 | 93% |
+| seller_trn | 50 | 35 | 4 | 11 | 70% |
+| **All fields** | 517 | 410 | 83 | 24 | **79%** |
+
+- Catch rate (a rule flagged the wrong field): 44 of 107 (41%); without seller_trn: 29 of 92 (32%)
+- Wrong fields not shown green (flagged or amber for any reason): 92 of 107 (86%); without seller_trn: 77 of 92 (84%)
+- False alarms (a rule flagged a correct field): 80 of 410 (20%); without seller_trn: 45 of 375 (12%)
+- Time: 16.1 s per document (100 documents, 0 failed)
+
