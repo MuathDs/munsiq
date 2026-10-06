@@ -46,9 +46,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rapidfuzz import fuzz
 
 from app.services.normalize import normalize_for_match, normalize_text
+from scripts.coru_sample import split_dir
 
 REPO = Path(__file__).resolve().parents[2]
 CORU = REPO / "samples" / "eval" / "coru"
+SPLIT_NOTE = {
+    "test": "the held-out TEST sample (seed 0)",
+    "dev": "the DEV sample (seed 1, no receipt shared with the test sample)",
+}
 RESULTS = REPO / "docs" / "results.md"
 
 AMOUNT_FIELDS = frozenset({"subtotal", "vat_amount", "total_amount"})
@@ -465,18 +470,20 @@ def read_receipt(pdf_bytes: bytes, *, mode: str, few_shot: bool) -> Reading:
     )
 
 
-def run(label: str, *, mode: str, few_shot: bool, limit: int | None) -> Scoreboard:
+def run(
+    label: str, *, mode: str, few_shot: bool, limit: int | None, split: str = "test"
+) -> Scoreboard:
     from app.services.extraction.client import InferenceError
 
     truth: dict[str, dict[str, list[str]]] = json.loads(
-        (CORU / "ground_truth.json").read_text(encoding="utf-8")
+        (split_dir(split) / "ground_truth.json").read_text(encoding="utf-8")
     )["receipts"]
     scores = Scoreboard(label=label)
     details: dict[str, object] = {}
     for receipt_id in sorted(truth)[:limit]:
         expected = truth[receipt_id]
         started = time.monotonic()
-        pdf = image_to_pdf((CORU / "images" / f"{receipt_id}.jpg").read_bytes())
+        pdf = image_to_pdf((split_dir(split) / "images" / f"{receipt_id}.jpg").read_bytes())
         try:
             reading: Reading | None = read_receipt(pdf, mode=mode, few_shot=few_shot)
             error = None
@@ -535,7 +542,9 @@ def _commit() -> str:
     )
 
 
-def append_result(scores: Scoreboard, *, title: str, mode: str, few_shot: bool) -> None:
+def append_result(
+    scores: Scoreboard, *, title: str, mode: str, few_shot: bool, split: str = "test"
+) -> None:
     from app.config import get_settings
 
     settings = get_settings()
@@ -554,12 +563,13 @@ def append_result(scores: Scoreboard, *, title: str, mode: str, few_shot: bool) 
             f"## {title}",
             "",
             f"- Date: {date.today().isoformat()} · commit: `{_commit()}`",
-            f"- Dataset: CORU `QA/test`, {scores.documents} receipts, seed 0 "
+            f"- Dataset: CORU `QA/test`, {SPLIT_NOTE[split]}, {scores.documents} receipts "
             "(`scripts/coru_sample.py`)",
             f"- Model: {model}, {'local Ollama' if local else 'REMOTE inference endpoint'}; "
             f"temperature 0, seed {settings.INFERENCE_SEED}, "
             "thinking off",
-            f"- Mode: `{mode}` · few-shot examples: {'2 synthetic' if few_shot else 'none'} · "
+            f"- Mode: `{mode}` · prompt v{settings.EXTRACTION_PROMPT_VERSION} · few-shot "
+            f"examples: {'2 synthetic' if few_shot else 'none'} · "
             f"QR reading: {'on' if settings.QR_READING else 'off'}",
             "",
             render(scores),
@@ -613,6 +623,12 @@ def main() -> int:
     parser.add_argument("--mode", choices=("text", "vision", "auto"), required=True)
     parser.add_argument("--few-shot", action="store_true")
     parser.add_argument("--limit", type=int, help="first N receipts only; not appended")
+    parser.add_argument(
+        "--split",
+        choices=("test", "dev"),
+        default="test",
+        help="dev: the receipts held apart for tuning; never the scored test sample",
+    )
     args = parser.parse_args()
     # A Windows console in a legacy code page cannot print every character in a
     # report; a display error must never cost a finished run.
@@ -621,11 +637,17 @@ def main() -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
     print(f"coru '{args.label}' [mode={args.mode}, few_shot={args.few_shot}]")
-    scores = run(args.label, mode=args.mode, few_shot=args.few_shot, limit=args.limit)
+    scores = run(
+        args.label, mode=args.mode, few_shot=args.few_shot, limit=args.limit, split=args.split
+    )
     if args.limit is None:
         # Saved before anything is printed.
         append_result(
-            scores, title=args.title or args.label, mode=args.mode, few_shot=args.few_shot
+            scores,
+            title=args.title or args.label,
+            mode=args.mode,
+            few_shot=args.few_shot,
+            split=args.split,
         )
     print()
     print(render(scores))

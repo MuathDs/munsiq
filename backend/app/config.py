@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     # run says it helps: docs/results.md has the runs with and without.
     EXTRACTION_FEW_SHOT: bool = False
 
+    # Which extraction prompt is sent (app/services/extraction/prompts.py).
+    # 1 is the original; 2 was calibrated on a development sample that shares
+    # no receipt with the scored test sample. Both stay runnable so a result can
+    # always be reproduced with the prompt it was measured under.
+    EXTRACTION_PROMPT_VERSION: int = Field(default=1, ge=1, le=2)
+
     # Deliberately a SEPARATE model, base URL and context size from the text
     # settings above, not a flag on the same client: a heavier VL model
     # (qwen2.5vl:7b, say) belongs on a machine with more VRAM — a Colab

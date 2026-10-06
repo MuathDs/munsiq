@@ -268,3 +268,36 @@ def _is_red(pdf: bytes, x: float, y: float) -> bool:
         pix = doc[0].get_pixmap(dpi=36)
     red, green, _blue = pix.pixel(int(x * (pix.width - 1)), int(y * (pix.height - 1)))[:3]
     return bool(red > 200 and green < 80)
+
+
+# --------------------------------------------------------------------------- #
+# Drawing samples: a dev set that never touches the test set
+# --------------------------------------------------------------------------- #
+def test_the_test_draw_is_what_it_always_was() -> None:
+    """Adding an exclusion list must not move the published 100-receipt sample:
+    with nothing excluded the draw is the original formula, seed for seed."""
+    import random
+
+    from scripts.coru_sample import choose_sample
+
+    eligible = [f"r{i:03}" for i in range(40)]
+    assert choose_sample(eligible, 10, seed=0) == sorted(random.Random(0).sample(eligible, 10))
+
+
+def test_a_dev_draw_never_contains_a_test_receipt() -> None:
+    from scripts.coru_sample import choose_sample
+
+    eligible = [f"r{i:03}" for i in range(40)]
+    held_out = choose_sample(eligible, 10, seed=0)
+    dev = choose_sample(eligible, 15, seed=1, exclude=held_out)
+
+    assert len(dev) == 15 and dev == sorted(dev)
+    assert not set(dev) & set(held_out)
+    assert dev == choose_sample(list(reversed(eligible)), 15, seed=1, exclude=held_out)
+
+
+def test_a_draw_larger_than_what_is_left_is_refused() -> None:
+    from scripts.coru_sample import choose_sample
+
+    with pytest.raises(SystemExit):
+        choose_sample(["a", "b", "c"], 3, seed=1, exclude=["a"])

@@ -23,15 +23,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.config import get_settings
 from app.services.extraction.client import InferenceClient, InferenceError
 from app.services.extraction.fewshot import FewShotExample
 from app.services.extraction.grounding import ground_value
 from app.services.extraction.labels import label_present
 from app.services.extraction.prompts import (
     SUSPICIOUS_KEY,
-    SYSTEM_PROMPT,
     FieldSpec,
     build_user_prompt,
+    system_prompt,
 )
 from app.services.pagetext import PageText
 from app.services.validation.engine import NUMERIC_TYPES, same_value
@@ -67,15 +68,25 @@ class ExtractionResult:
     model_called: bool = False
 
 
-def _document_text(pages: list[PageText], vision_page_numbers: frozenset[int] = frozenset()) -> str:
+def _document_text(
+    pages: list[PageText],
+    vision_page_numbers: frozenset[int] = frozenset(),
+    *,
+    markers: bool = True,
+) -> str:
     """Text pages are inlined as before. A page routed to vision contributes no
     text here — its own text layer is exactly what was judged unreliable — and
     gets a marker instead, in the same ascending-page-number order the
     corresponding images are attached in (see pipeline.py), so the model can
-    match each marker to the image that follows it."""
+    match each marker to the image that follows it.
+
+    ``markers=False`` (prompt version 2) leaves those pages out entirely: the
+    prompt announces them outside the data fence instead."""
     chunks: list[str] = []
     for page in pages:
         if page.page_number in vision_page_numbers:
+            if not markers:
+                continue
             chunks.append(
                 f"--- page {page.page_number}: no reliable text layer; read this "
                 "page from its attached image instead ---"
@@ -94,6 +105,7 @@ def run_extraction(
     page_images: list[bytes] | None = None,
     vision_page_numbers: frozenset[int] = frozenset(),
     examples: Sequence[FewShotExample] = (),
+    prompt_version: int | None = None,
 ) -> ExtractionResult:
     """Extract every requested field, honouring UBL precedence.
 
@@ -106,8 +118,10 @@ def run_extraction(
     """
     ubl_values = ubl_values or {}
     result = ExtractionResult()
+    version = get_settings().EXTRACTION_PROMPT_VERSION if prompt_version is None else prompt_version
+    system = system_prompt(version)
 
-    document_text = _document_text(pages, vision_page_numbers)
+    document_text = _document_text(pages, vision_page_numbers, markers=version == 1)
     has_inline_text = any(
         page.text and page.page_number not in vision_page_numbers for page in pages
     )
@@ -120,9 +134,10 @@ def run_extraction(
             result.values.append(_from_ubl_or_null(spec, ubl_values))
         return result
 
-    prompt = build_user_prompt(fields, document_text, examples=examples)
+    image_pages = sorted(vision_page_numbers) if version != 1 and page_images else []
+    prompt = build_user_prompt(fields, document_text, examples=examples, image_pages=image_pages)
     try:
-        chat = client.chat(system=SYSTEM_PROMPT, user=prompt, images=page_images)
+        chat = client.chat(system=system, user=prompt, images=page_images)
         payload = chat.as_json()
     except InferenceError as exc:
         logger.error("extraction.failed", extra={"error": str(exc)})

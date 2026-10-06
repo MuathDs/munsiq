@@ -19,9 +19,11 @@ from app.services.extraction.prompts import (
     DOCUMENT_CLOSE,
     DOCUMENT_OPEN,
     SUSPICIOUS_KEY,
+    SYSTEM_PROMPT,
     FieldSpec,
     build_user_prompt,
     parse_schema,
+    system_prompt,
 )
 from app.services.extraction.runner import run_extraction
 from app.services.pagetext import PageText, TextSource, Word
@@ -483,3 +485,111 @@ def test_few_shot_is_off_unless_configured() -> None:
 
     assert Settings.model_fields["EXTRACTION_FEW_SHOT"].default is False
 
+
+# --------------------------------------------------------------------------- #
+# 7. Prompt version 2 — calibrated on a dev set, never on the scored receipts
+#
+# Version 1 put "read this page from its attached image" INSIDE the fence it
+# declares to be data-never-instructions, and told the model that null is
+# correct. A model that follows rules literally then ignores the image and
+# answers null. Version 2 moves the image instruction outside the fence and
+# says when null is right. Version 1 stays available, byte for byte, so the
+# two can be scored side by side.
+# --------------------------------------------------------------------------- #
+IMAGE_PAGE = PageText(page_number=1, source=TextSource.OCR, text="", words=[])
+
+
+def _prompts(pages, *, version, vision=frozenset(), images=None):  # type: ignore[no-untyped-def]
+    client = FakeClient({"invoice_number": "X-1"})
+    run_extraction(
+        client=client,
+        fields=FIELDS,
+        pages=pages,
+        page_images=images,
+        vision_page_numbers=vision,
+        prompt_version=version,
+    )
+    return client.calls[0]["system"], client.calls[0]["user"]
+
+
+def test_version_1_is_untouched() -> None:
+    """Old results must stay reproducible: same system prompt, same user prompt."""
+    assert system_prompt(1) == SYSTEM_PROMPT
+    system, user = _prompts([PAGE], version=1)
+    assert system == SYSTEM_PROMPT
+    assert user == build_user_prompt(FIELDS, "--- page 1 ---\n" + PAGE.text)
+
+    _, vision_user = _prompts([IMAGE_PAGE], version=1, vision=frozenset({1}), images=[b"img"])
+    fenced = vision_user.split(DOCUMENT_OPEN, 1)[1]
+    assert "read this page from its attached image" in fenced, "v1 keeps its marker in the fence"
+
+
+def test_version_2_tells_the_model_to_read_the_image_outside_the_data_fence() -> None:
+    _, user = _prompts([IMAGE_PAGE], version=2, vision=frozenset({1}), images=[b"img"])
+
+    assert "attached" in user and "image" in user
+    if DOCUMENT_OPEN in user:
+        before, fenced = user.split(DOCUMENT_OPEN, 1)
+        assert "image" in before
+        assert "image" not in fenced.split(DOCUMENT_CLOSE, 1)[0], (
+            "nothing inside the data fence may be an instruction"
+        )
+
+
+def test_version_2_has_no_empty_fence_when_every_page_is_an_image() -> None:
+    """An empty 'document text' region reads as an empty document."""
+    _, user = _prompts([IMAGE_PAGE], version=2, vision=frozenset({1}), images=[b"img"])
+    assert DOCUMENT_OPEN not in user and DOCUMENT_CLOSE not in user
+
+
+def test_version_2_mixed_document_fences_the_text_and_announces_the_image() -> None:
+    second = PageText(page_number=2, source=TextSource.OCR, text="", words=[])
+    _, user = _prompts([PAGE, second], version=2, vision=frozenset({2}), images=[b"img"])
+
+    before, fenced = user.split(DOCUMENT_OPEN, 1)
+    assert PAGE.text in fenced
+    assert "page 2" in before.lower() and "image" in before
+    assert "image" not in fenced.split(DOCUMENT_CLOSE, 1)[0]
+
+
+def test_version_2_text_only_user_prompt_is_the_same_request() -> None:
+    """Only image pages needed a different request; a text document asks the
+    same thing in both versions (the system prompt is what differs)."""
+    _, v1 = _prompts([PAGE], version=1)
+    _, v2 = _prompts([PAGE], version=2)
+    assert v1 == v2
+
+
+def test_version_2_keeps_the_anti_hallucination_rules() -> None:
+    system = system_prompt(2).lower()
+    assert "never invent" in system
+    assert "null" in system and "not" in system
+    assert "data" in system and "instructions" in system
+    assert SUSPICIOUS_KEY in system_prompt(2)
+    assert "image" in system, "an attached image is declared to BE the document"
+
+
+def test_an_unknown_prompt_version_is_refused() -> None:
+    with pytest.raises(ValueError, match="prompt version"):
+        system_prompt(3)
+
+
+def test_the_prompt_version_comes_from_settings_unless_given(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "EXTRACTION_PROMPT_VERSION", 2)
+    client = FakeClient({"invoice_number": "X-1"})
+    run_extraction(client=client, fields=FIELDS, pages=[PAGE])
+    assert client.calls[0]["system"] == system_prompt(2)
+
+
+def test_the_prompt_version_can_be_set_from_the_environment() -> None:
+    """An environment variable arrives as text; '2' must mean 2, and 3 is refused."""
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    assert Settings(EXTRACTION_PROMPT_VERSION="2").EXTRACTION_PROMPT_VERSION == 2  # type: ignore[arg-type]
+    assert Settings.model_fields["EXTRACTION_PROMPT_VERSION"].default == 1
+    with pytest.raises(ValidationError):
+        Settings(EXTRACTION_PROMPT_VERSION="3")  # type: ignore[arg-type]

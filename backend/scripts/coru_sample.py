@@ -3,6 +3,7 @@
     backend/.venv/Scripts/python.exe -m scripts.coru_sample annotations
     backend/.venv/Scripts/python.exe -m scripts.coru_sample questions
     backend/.venv/Scripts/python.exe -m scripts.coru_sample sample --n 100 --seed 0
+    backend/.venv/Scripts/python.exe -m scripts.coru_sample sample --split dev --n 50 --seed 1
 
 CORU (Abdallah et al., "ReceiptSense", arXiv:2406.04493; Hugging Face dataset
 ``abdoelsayed/CORU``, MIT licence) is a public set of Arabic/English retail
@@ -17,6 +18,11 @@ of wordings; see ``FIELD_QUESTIONS``.
 The split is one 3.9 GB zip. Nothing here downloads it whole: the zip's
 directory is read with HTTP range requests and only the entries needed are
 fetched — every annotation JSON (4.5 MB) and the sampled images.
+
+Two splits. ``test`` is the 100-receipt sample every published number is
+scored on. ``dev`` is drawn from the receipts that are NOT in it, for anything
+that has to be tuned — a prompt, a threshold — so that tuning never sees the
+receipts it is later scored on.
 
 Everything lands in ``samples/eval/coru/``, which is git-ignored.
 """
@@ -44,6 +50,13 @@ OUT = Path(__file__).resolve().parents[2] / "samples" / "eval" / "coru"
 ANNOTATIONS = OUT / "qa.json"
 GROUND_TRUTH = OUT / "ground_truth.json"
 IMAGES = OUT / "images"
+SPLITS = ("test", "dev")
+
+
+def split_dir(split: str) -> Path:
+    """The test split keeps its original place; every other split gets a folder."""
+    return OUT if split == "test" else OUT / split
+
 
 # Our field -> the CORU questions (normalized, see `normalize_question`) that
 # ask for it. Chosen from the question counts over every receipt (`questions`
@@ -224,27 +237,55 @@ def ground_truth_for(pairs: list[dict[str, str]]) -> dict[str, list[str]]:
     }
 
 
-def cmd_sample(n: int, seed: int) -> None:
+def choose_sample(
+    eligible: list[str], n: int, *, seed: int, exclude: list[str] | tuple[str, ...] = ()
+) -> list[str]:
+    """A fixed draw of ``n`` receipts, never one of ``exclude``.
+
+    With nothing excluded this is the formula the test sample was drawn with,
+    so that sample cannot move. The pool is sorted first, so the draw depends
+    on the seed and the ids alone, not on the order they were listed in.
+    """
+    held_out = set(exclude)
+    pool = sorted(rid for rid in eligible if rid not in held_out)
+    if n > len(pool):
+        raise SystemExit(f"asked for {n} receipts, only {len(pool)} are eligible and not excluded")
+    return sorted(random.Random(seed).sample(pool, n))
+
+
+def cmd_sample(n: int, seed: int, split: str) -> None:
     qa = load_annotations()
     truth = {rid: ground_truth_for(pairs) for rid, pairs in qa.items()}
     eligible = sorted(rid for rid, gt in truth.items() if all(f in gt for f in REQUIRED_FIELDS))
-    chosen = sorted(random.Random(seed).sample(eligible, n))
+    exclude: list[str] = []
+    if split != "test":
+        if not GROUND_TRUTH.exists():
+            raise SystemExit("draw the test split first: a dev split is defined against it")
+        exclude = sorted(json.loads(GROUND_TRUTH.read_text(encoding="utf-8"))["receipts"])
+    chosen = choose_sample(eligible, n, seed=seed, exclude=exclude)
+    assert not set(chosen) & set(exclude)
     print(f"{len(qa)} receipts; per-field ground truth available:")
     for field in FIELD_QUESTIONS:
         print(f"  {field:16} {sum(field in gt for gt in truth.values())}")
-    print(f"{len(eligible)} answer all of {REQUIRED_FIELDS}; sampled {n} with seed {seed}")
+    print(
+        f"{len(eligible)} answer all of {REQUIRED_FIELDS}; {len(exclude)} held out as the "
+        f"test split; sampled {n} with seed {seed} for split '{split}'"
+    )
+    target = split_dir(split)
+    images, ground_truth = target / "images", target / "ground_truth.json"
 
     by_name = {i.filename: i for i in directory()}
     infos = [by_name[f"test/{rid}.jpg"] for rid in chosen]
-    IMAGES.mkdir(parents=True, exist_ok=True)
+    images.mkdir(parents=True, exist_ok=True)
     total = 0
     for rid, data in zip(chosen, fetch_many(infos), strict=True):
-        (IMAGES / f"{rid}.jpg").write_bytes(data)
+        (images / f"{rid}.jpg").write_bytes(data)
         total += len(data)
-    GROUND_TRUTH.write_text(
+    ground_truth.write_text(
         json.dumps(
             {
                 "dataset": "abdoelsayed/CORU (QA/test)",
+                "split": split,
                 "seed": seed,
                 "n": n,
                 "receipts": {rid: truth[rid] for rid in chosen},
@@ -254,7 +295,7 @@ def cmd_sample(n: int, seed: int) -> None:
         ),
         encoding="utf-8",
     )
-    print(f"wrote {n} images ({total / 1e6:.0f} MB) and {GROUND_TRUTH}")
+    print(f"wrote {n} images ({total / 1e6:.0f} MB) and {ground_truth}")
     counts = Counter(f for rid in chosen for f in truth[rid])
     print("ground truth in the sample:")
     for field in FIELD_QUESTIONS:
@@ -273,13 +314,14 @@ def main() -> int:
     p_sample = sub.add_parser("sample", help="pick receipts and fetch their images")
     p_sample.add_argument("--n", type=int, default=100)
     p_sample.add_argument("--seed", type=int, default=0)
+    p_sample.add_argument("--split", choices=SPLITS, default="test")
     args = parser.parse_args()
     if args.command == "annotations":
         cmd_annotations()
     elif args.command == "questions":
         cmd_questions(args.top)
     else:
-        cmd_sample(args.n, args.seed)
+        cmd_sample(args.n, args.seed, args.split)
     return 0
 
 

@@ -171,3 +171,51 @@ shown green, so a reviewer is not handed an empty document that looks finished.
 Sending these images to Colab did not break the local-only rule for user
 documents: CORU is a public dataset. `backend/.env` was not edited — the tunnel
 URL and model were environment variables on that one command.
+## Dev · baseline · prompt v1 (the original) · qwen3.5:9b, Colab T4
+
+- Date: 2026-10-06 · commit: `17ef42b + uncommitted changes`
+- Dataset: CORU `QA/test`, the DEV sample (seed 1, no receipt shared with the test sample), 50 receipts (`scripts/coru_sample.py`)
+- Model: `qwen3.5:9b` on page images at 100 DPI (num_ctx 4096), REMOTE inference endpoint; temperature 0, seed 0, thinking off
+- Mode: `vision` · prompt v1 · few-shot examples: none · QR reading: on
+
+| Field | With ground truth | Correct | Wrong | Missing | Exact match |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 50 | 9 | 4 | 37 | 18% |
+| seller_name, fuzzy (token-set ≥ 85) | 50 | 11 | | | 22% |
+| issue_date | 50 | 13 | 0 | 37 | 26% |
+| invoice_number | 46 | 7 | 2 | 37 | 15% |
+| subtotal | 23 | 3 | 0 | 20 | 13% |
+| vat_amount | 19 | 5 | 0 | 14 | 26% |
+| total_amount | 50 | 13 | 0 | 37 | 26% |
+| seller_trn | 25 | 2 | 0 | 23 | 8% |
+| **All fields** | 263 | 52 | 6 | 205 | **20%** |
+
+- Catch rate (a rule flagged the wrong field): 205 of 211 (97%); without seller_trn: 182 of 188 (97%)
+- Wrong fields not shown green (flagged or amber for any reason): 207 of 211 (98%); without seller_trn: 184 of 188 (98%)
+- False alarms (a rule flagged a correct field): 9 of 52 (17%); without seller_trn: 7 of 50 (14%)
+- Time: 14.4 s per document (50 documents, 0 failed)
+
+## Dev · iteration 1 · image instruction moved outside the data fence, no empty fence, null only when not printed · qwen3.5:9b, Colab T4
+
+- Date: 2026-10-06 · commit: `17ef42b + uncommitted changes`
+- Dataset: CORU `QA/test`, the DEV sample (seed 1, no receipt shared with the test sample), 50 receipts (`scripts/coru_sample.py`)
+- Model: `qwen3.5:9b` on page images at 100 DPI (num_ctx 4096), REMOTE inference endpoint; temperature 0, seed 0, thinking off
+- Mode: `vision` · prompt v2 · few-shot examples: none · QR reading: on
+
+| Field | With ground truth | Correct | Wrong | Missing | Exact match |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 50 | 34 | 14 | 2 | 68% |
+| seller_name, fuzzy (token-set ≥ 85) | 50 | 42 | | | 84% |
+| issue_date | 50 | 47 | 3 | 0 | 94% |
+| invoice_number | 46 | 24 | 19 | 3 | 52% |
+| subtotal | 23 | 21 | 2 | 0 | 91% |
+| vat_amount | 19 | 17 | 2 | 0 | 89% |
+| total_amount | 50 | 48 | 2 | 0 | 96% |
+| seller_trn | 25 | 20 | 3 | 2 | 80% |
+| **All fields** | 263 | 211 | 45 | 7 | **80%** |
+
+- Catch rate (a rule flagged the wrong field): 14 of 52 (27%); without seller_trn: 9 of 47 (19%)
+- Wrong fields not shown green (flagged or amber for any reason): 41 of 52 (79%); without seller_trn: 36 of 47 (77%)
+- False alarms (a rule flagged a correct field): 45 of 211 (21%); without seller_trn: 25 of 191 (13%)
+- Time: 16.0 s per document (50 documents, 0 failed)
+
