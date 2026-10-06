@@ -1,5 +1,19 @@
 # Munsiq — منسق
 
+**At a glance**
+
+- **78% field accuracy** on 100 public Arabic/English receipts (CORU), with a
+  4B model on a 4 GB laptop GPU.
+- **Image input vs OCR text: 41% → 78%** on those same receipts.
+- **ZATCA XML and QR are read deterministically**, before any model; reading
+  the QR took a real invoice from 7/9 to 9/9 fields.
+- **19 validation rules, 596 automated tests**, and tenant isolation enforced
+  by Postgres row-level security.
+- **Fully local inference**, no cloud AI API.
+
+Numbers and how they were measured: [Results](#results) and
+[`docs/results.md`](docs/results.md).
+
 Document information extraction for Saudi tax invoices, Arabic and English, for
 the **receiving** side of ZATCA Phase 2.
 
