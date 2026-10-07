@@ -328,3 +328,143 @@ version 1 did not.
 `EXTRACTION_PROMPT_VERSION` defaults to 2 from this point; 1 stays selectable,
 so every earlier number can be reproduced under the prompt it was measured
 with.
+## Dev · ceiling check · qwen3.5:4b local, 100 DPI, 4096 context
+
+- Date: 2026-10-07 · commit: `28c4f81 + uncommitted changes`
+- Dataset: CORU `QA/test`, the DEV sample (seed 1, no receipt shared with the test sample), 50 receipts (`scripts/coru_sample.py`)
+- Model: `qwen3.5:4b` on page images at 100 DPI (num_ctx 4096), local Ollama; temperature 0, seed 0, thinking off
+- Mode: `vision` · prompt v2 · few-shot examples: none · QR reading: on
+
+| Field | With ground truth | Correct | Wrong | Missing | Exact match |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 50 | 32 | 18 | 0 | 64% |
+| seller_name, fuzzy (token-set ≥ 85) | 50 | 42 | | | 84% |
+| issue_date | 50 | 46 | 4 | 0 | 92% |
+| invoice_number | 46 | 23 | 22 | 1 | 50% |
+| subtotal | 23 | 21 | 2 | 0 | 91% |
+| vat_amount | 19 | 16 | 2 | 1 | 84% |
+| total_amount | 50 | 49 | 1 | 0 | 98% |
+| seller_trn | 25 | 20 | 3 | 2 | 80% |
+| **All fields** | 263 | 207 | 52 | 4 | **79%** |
+
+- Catch rate (a rule flagged the wrong field): 11 of 56 (20%); without seller_trn: 7 of 51 (14%)
+- Wrong fields not shown green (flagged or amber for any reason): 42 of 56 (75%); without seller_trn: 37 of 51 (73%)
+- False alarms (a rule flagged a correct field): 45 of 207 (22%); without seller_trn: 25 of 187 (13%)
+- Time: 22.0 s per document (50 documents, 0 failed)
+
+## Dev · ceiling check · qwen3.5:4b local, 200 DPI, 8192 context
+
+- Date: 2026-10-07 · commit: `28c4f81 + uncommitted changes`
+- Dataset: CORU `QA/test`, the DEV sample (seed 1, no receipt shared with the test sample), 50 receipts (`scripts/coru_sample.py`)
+- Model: `qwen3.5:4b` on page images at 200 DPI (num_ctx 8192), local Ollama; temperature 0, seed 0, thinking off
+- Mode: `vision` · prompt v2 · few-shot examples: none · QR reading: on
+
+| Field | With ground truth | Correct | Wrong | Missing | Exact match |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 50 | 35 | 15 | 0 | 70% |
+| seller_name, fuzzy (token-set ≥ 85) | 50 | 42 | | | 84% |
+| issue_date | 50 | 48 | 2 | 0 | 96% |
+| invoice_number | 46 | 24 | 20 | 2 | 52% |
+| subtotal | 23 | 22 | 1 | 0 | 96% |
+| vat_amount | 19 | 16 | 2 | 1 | 84% |
+| total_amount | 50 | 49 | 1 | 0 | 98% |
+| seller_trn | 25 | 19 | 3 | 3 | 76% |
+| **All fields** | 263 | 213 | 44 | 6 | **81%** |
+
+- Catch rate (a rule flagged the wrong field): 13 of 50 (26%); without seller_trn: 7 of 44 (16%)
+- Wrong fields not shown green (flagged or amber for any reason): 37 of 50 (74%); without seller_trn: 31 of 44 (70%)
+- False alarms (a rule flagged a correct field): 41 of 213 (19%); without seller_trn: 22 of 194 (11%)
+- Time: 28.0 s per document (50 documents, 0 failed)
+
+## 4B vs 9B on the test sample — is the comparison fair, and where do they differ?
+
+Written by hand on 2026-10-07 from the saved records of the two final test
+runs (`local-b-vision-v2`, `colab-b-vision-v2`). No model was run for this
+section, and the test sample was not scored again.
+
+**The two runs used the same settings.** Read from each run's own header above
+and from its per-receipt records:
+
+| | `qwen3.5:4b`, laptop | `qwen3.5:9b`, Colab T4 |
+| --- | --- | --- |
+| Prompt version | 2 | 2 |
+| Mode | vision, 100 of 100 receipts | vision, 100 of 100 receipts |
+| Page image | 100 DPI, WebP quality 85 | 100 DPI, WebP quality 85 |
+| Preprocessing | photo turned upright (EXIF), fitted to an A4-long-side page | the same code |
+| Context, sampling | 4,096 tokens · temperature 0 · seed 0 · thinking off | the same |
+| Few-shot · QR reading | none · on | none · on |
+| Receipts · scored fields | the same 100 · the same 517 | |
+| Commit | `5ad331b` | `8fc0da6` |
+
+The two commits differ by one file, `docs/results.md`; no code changed between
+them. What is NOT identical: the Ollama build (0.35.0 on the laptop, 0.35.1 on
+Colab) and where the layers run (the laptop keeps about half of the 4B model on
+the CPU). Neither is a setting of the comparison, but they are not controlled.
+
+**Per field.**
+
+| Field | Scored | 4B correct | 9B correct | 9B − 4B | Wrong in both | Only 4B wrong | Only 9B wrong |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| seller_name | 100 | 58 (58%) | 74 (74%) | +16 | 24 | 18 | 2 |
+| issue_date | 100 | 96 (96%) | 96 (96%) | 0 | 4 | 0 | 0 |
+| invoice_number | 82 | 51 (62%) | 36 (44%) | −15 | 28 | 3 | 18 |
+| subtotal | 52 | 47 (90%) | 49 (94%) | +2 | 3 | 2 | 0 |
+| vat_amount | 33 | 25 (76%) | 27 (82%) | +2 | 6 | 2 | 0 |
+| total_amount | 100 | 91 (91%) | 93 (93%) | +2 | 4 | 5 | 3 |
+| seller_trn | 50 | 35 (70%) | 35 (70%) | 0 | 12 | 3 | 3 |
+| **All** | **517** | **403 (77.9%)** | **410 (79.3%)** | **+7** | **81** | **33** | **26** |
+
+CORU's QA split has no ground truth for line items, so none is scored.
+
+- **On this dataset and evaluation setup, 4B to 9B gave only a marginal
+  change:** +7 fields of 517, 1.4 points.
+- **The total hides a trade.** The 9B is 16 fields better on the store name and
+  15 worse on the receipt number (12 of those it returned empty). On dates,
+  amounts and VAT numbers the two are within two fields of each other.
+- **Most errors are shared.** 81 fields are wrong in both models — 71% of the
+  4B's errors and 76% of the 9B's — and on 39 of them the two models returned
+  the identical wrong value. A field either model got right: 436 of 517
+  (84.3%).
+- By receipt: the 9B did better on 23, the 4B on 18, and they tied on 59.
+
+**Why the wrong fields were wrong** (`scripts/coru_errors.py`, rules with
+tests, same two runs):
+
+| Cause | 4B (114 wrong) | 9B (107 wrong) |
+| --- | ---: | ---: |
+| Misread characters or digits | 33 | 38 |
+| Label-style mismatch (the label's convention, not the page's) | 34 | 27 |
+| Wrong field picked | 12 | 6 |
+| Empty | 14 | 24 |
+| Unclassified (near neither the label nor any other annotated value) | 21 | 12 |
+
+Label style is the shop named with its branch or legal name, another of the
+numbers the receipt prints, and — four fields per model — an amount the scorer
+marks wrong only because the label uses a decimal comma (`*24,44` against a
+correct `24.44`). The scorer was left as it is, so no earlier number moves; the
+four are counted here instead. Misreads are mostly long receipt numbers: 20 of
+the 4B's 33 and 22 of the 9B's 38.
+
+**Resolution, on the dev sample only** (50 receipts, 263 fields, prompt v2):
+
+| | 100 DPI, 4,096 context | 200 DPI, 8,192 context |
+| --- | ---: | ---: |
+| `qwen3.5:4b`, laptop | 207 (78.7%), 22.0 s/receipt | 213 (81.0%), 28.0 s/receipt |
+| `qwen3.5:9b`, Colab | 211 (80.2%) | not run |
+
+The 4B does run at 200 DPI on the 4 GB laptop (about half of it on the CPU, as
+at 100 DPI); the image costs roughly twice the prompt tokens. It gained six
+fields, and its misreads fell from 26 to 22. The 9B at 200 DPI was planned and
+then not run, by decision, so the question "would the larger model pull ahead
+with more pixels?" is NOT answered here. What is measured is that at the same
+settings the two sizes are 1.4 points apart on the test sample and 1.5 on the
+dev sample.
+
+**What this supports, and what it does not.** On these receipts, at 100 DPI,
+with this prompt and this scorer, doubling the model changed the total
+marginally, because most of what is left is not something a larger model of the
+same family fixes at this resolution: labels in another convention than the
+page (a quarter of the errors), and digits too small to read (a third). It does
+not show that model size never matters — a different dataset, a higher
+resolution, or a harder task could separate them, and the store-name column
+already does.

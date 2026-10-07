@@ -330,6 +330,30 @@ there). Then the untouched 100-receipt test sample was scored once per model:
   produced no value the original did not: 9B vision 80 → 88 of 88 fields, 4B
   vision 76 → 80, 7B text 86 → 85 (one `currency` value).
 
+**Why does a model twice the size score about the same here?** On this dataset
+and evaluation setup, 4B to 9B gave only a marginal change: 403 → 410 of 517
+fields, at identical settings (prompt, 100 DPI images, context, sampling — read
+back from the saved runs, not assumed). Most of what is left is not something
+more parameters fix at this resolution. 81 fields are wrong in *both* models,
+and on 39 of them the two returned the identical wrong value. Sorted by cause,
+about a third of the errors are misread characters, mostly long receipt numbers
+too small to read at 100 DPI, and about a quarter are the label following a
+different convention than the page — the shop named without its branch,
+another of the receipt's printed numbers, a decimal comma. The near-equal total
+also hides a trade: the 9B is 16 fields better on store names and 15 worse on
+receipt numbers. This does not show that size never matters; it shows where
+these two sizes land on these receipts. On the development sample, doubling the
+resolution helped the 4B model by 2.3 points (207 → 213 of 263); the 9B at that
+resolution was not run.
+
+| Test sample, 517 fields | 4B, laptop | 9B, Colab |
+| --- | :---: | :---: |
+| Correct | 403 (77.9%) | 410 (79.3%) |
+| Store name · receipt number | 58% · 62% | 74% · 44% |
+| Date · total · subtotal | 96% · 91% · 90% | 96% · 93% · 94% |
+| Wrong in both · only this model | 81 · 33 | 81 · 26 |
+| Errors: misread · label style · wrong field · empty · unclassified | 33 · 34 · 12 · 14 · 21 | 38 · 27 · 6 · 24 · 12 |
+
 The original prompt stays selectable (`EXTRACTION_PROMPT_VERSION=1`), so every
 number above can be reproduced under the prompt it was measured with. Full
 per-field table: [`docs/results.md`](docs/results.md). The investigation is
@@ -633,9 +657,10 @@ How Munsiq differs:
 * **Catch plausible wrong values.** With the calibrated prompt neither model
   returns empty receipts, so what is left is the harder error: a store name or
   receipt number that is wrong and looks settled (22 and 15 of 517 fields).
-  Reading the page at a higher resolution, and a second-pass check on long
-  digit strings, are the obvious next measurements — on the development
-  sample, not the test sample.
+  A third of the errors are misread characters, so resolution is the first
+  thing to measure: on the development sample 200 DPI gave the 4B model 2.3
+  points, and the 9B at 200 DPI is still to run. A second-pass check on long
+  digit strings is the other.
 * **Fine-tune on CORU.** Its training splits are public and MIT-licensed; the
   100-receipt sample used here stays held out.
 
