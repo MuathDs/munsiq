@@ -1,21 +1,24 @@
 # Munsiq — منسق
 
+Document information extraction for Saudi tax invoices, Arabic and English, for
+the **receiving** side of ZATCA Phase 2.
+
 **At a glance**
 
 - **78% field accuracy** on 100 public Arabic/English receipts (CORU), with a
   4B model on a 4 GB laptop GPU.
+- **A prompt bug, not model size:** `qwen3.5:9b` went from 17% to 79%
+  after one prompt fix; 4B vs 9B ended at 403 vs 410 of 517 fields.
 - **Image input vs OCR text: 41% → 78%** on those same receipts.
 - **ZATCA XML and QR are read deterministically**, before any model; reading
   the QR took a real invoice from 7/9 to 9/9 fields.
 - **19 validation rules, 633 automated tests**, and tenant isolation enforced
   by Postgres row-level security.
-- **Fully local inference**, no cloud AI API.
+- **Fully local inference in the product**, no cloud AI API. The 9B
+  comparison below was an evaluation run on a Colab T4.
 
 Numbers and how they were measured: [Results](#results) and
 [`docs/results.md`](docs/results.md).
-
-Document information extraction for Saudi tax invoices, Arabic and English, for
-the **receiving** side of ZATCA Phase 2.
 
 A portfolio project, built as a working system rather than a demo: Postgres with
 row-level security, a real extraction pipeline, a deterministic rules engine, a
@@ -152,107 +155,6 @@ keeps its authority either way: the XML is what was signed, not the page.
 
 ## Results
 
-One real invoice, scored against hand-entered ground truth: a two-page Arabic
-B2B tax invoice from a Saudi contractor, no embedded XML, a clean text layer on
-page 1 and a blank filler page 2. The invoice and its ground truth were
-personal data, never committed, and have since been deleted; only the scores
-remain, as dated records that can no longer be re-run.
-
-Measured 2026-09-24 with `scripts/eval_set.py score`, nine header fields, the
-full schema-conditioned prompt with field guidelines. Temperature 0, seed 0 and
-`think: false` on every call. The vision run was repeated three times and
-scored identically each time; that is repeatable here, not guaranteed, since
-Ollama's prompt cache has been seen to change a value between a cold and a warm
-run (recorded in `CLAUDE.md`).
-
-| Field | Text path<br/>`qwen2.5:7b-instruct` | Vision path<br/>`qwen3.5:4b`, every page as an image | Auto (the default)<br/>page 1 as text, page 2 as an image |
-| --- | :---: | :---: | :---: |
-| Invoice number | ✓ | ✓ | ✓ |
-| Issue date | ✓ | ✓ | ✓ |
-| Seller name | ✓ | ✗ | ✓ |
-| Seller VAT number | ✓ | ✗ swapped with the buyer's | ✓ |
-| Buyer name | ✓ | ✗ | ✓ |
-| Buyer VAT number | ✓ | ✗ swapped with the seller's | ✓ |
-| Subtotal | ✗ returned null, now flagged for review | ✓ | ✗ |
-| VAT amount | ✓ | ✓ | ✓ |
-| Total | ✓ | ✓ | ✗ |
-| **Correct** | **8 / 9** | **5 / 9** | **7 / 9** |
-
-What this does and does not show:
-
-* **n = 1.** One invoice is an anecdote, not an accuracy figure. It is here
-  because it is real, not because it generalises.
-* **On a clean text layer, the text path wins.** That is the case it is built
-  for. Vision exists for pages with no usable text, and this invoice has none
-  of those that carry data, so it cannot show vision earning its place.
-* **Vision got the whole totals block right and the parties wrong.** Both names
-  missed, well away from the ground truth (under 50% similarity), not a dropped
-  word; the two VAT numbers came back swapped with each other, checked directly
-  rather than inferred from the scores. The invoice prints two similar
-  registration blocks, and nothing in the prompt anchors which one is the
-  seller's letterhead.
-* **Auto cost a field here, because of the blank page.** Page 2 has no text, so
-  routing sends it as an image, which moves the *whole* call to the vision
-  model. A page with nothing on it should not need vision; see
-  [Known limitations](#known-limitations).
-
-**How the vision model was chosen.** By hand, before the pipeline was wired,
-with the same bare prompt and no field list on this same invoice:
-`qwen2.5vl:3b` scored 7/9; `qwen3.5:4b` at Ollama's own defaults scored 3/9 and
-invented computed values; `qwen3.5:4b` with temperature 0, a fixed seed and
-thinking off scored 8/9. Ollama defaults that model to temperature 1, and its
-OpenAI-compatible endpoint silently ignores `think`, which is why the client
-now calls Ollama's native API and pins all three on every request.
-
-### Reading the ZATCA QR: off vs on
-
-A simplified (B2C) receipt carries no XML, but must print the ZATCA QR. Decoding
-it (OpenCV, no model) gives the seller name, VAT number, date, total and VAT
-exactly; the subtotal then follows as total − VAT. Measured 2026-09-30 with
-`scripts/benchmark.py --qr off|on` on the eight **synthetic** test invoices
-(`scripts/make_test_invoices.py`; two are receipts with a QR, 07 English and 08
-Arabic), local Ollama, eleven header fields per invoice. The model reads every
-invoice, signed XML ignored, so the six non-receipts are the same with QR on or
-off and only the receipts can move.
-
-| Field | Text `qwen2.5:7b-instruct`<br/>QR off → on | Vision `qwen3.5:4b`<br/>QR off → on |
-| --- | :---: | :---: |
-| Invoice number | 8/8 → 8/8 | 8/8 → 8/8 |
-| Issue date | 8/8 → 8/8 | 8/8 → 8/8 |
-| Seller name | 8/8 → 8/8 | 5/8 → **6/8** |
-| Seller VAT number | 8/8 → 8/8 | 8/8 → 8/8 |
-| Buyer name | 8/8 → 8/8 | 5/8 → 5/8 |
-| Buyer VAT number | 8/8 → 8/8 | 8/8 → 8/8 |
-| Subtotal | 6/8 → **8/8** | 5/8 → **7/8** |
-| VAT amount | 8/8 → 8/8 | 8/8 → 8/8 |
-| Total | 8/8 → 8/8 | 5/8 → **7/8** |
-| Currency | 8/8 → 8/8 | 8/8 → 8/8 |
-| PO number | 8/8 → 8/8 | 8/8 → 8/8 |
-| **All fields** | **86/88 (98%) → 88/88 (100%)** | **76/88 (86%) → 81/88 (92%)** |
-| The two receipts alone | 20/22 → 22/22 | 16/22 → 21/22 |
-
-The receipt-only row was re-run separately and moves by exactly as much as the
-full run, so the difference is the QR's and not run-to-run noise.
-
-* **Text path:** the model already reads the QR's five fields correctly off
-  these clean synthetic pages. What it cannot read is a subtotal that is not
-  printed: it returns null on both receipts. The QR's total and VAT fill it.
-* **Vision path:** the model misread both receipts' totals, one seller name,
-  and so both subtotals; the QR corrects all five. What is left on the receipts
-  is a buyer name invented for a receipt that has no buyer — the QR carries no
-  buyer, so it cannot help there.
-* **These are synthetic pages** with crisp, generated QR codes. A printed and
-  re-scanned QR is harder to decode, and none has been measured here. When the
-  QR cannot be read the pipeline simply falls back to the model's reading.
-
-**And on the real invoice.** The contractor invoice in the table above is a
-B2B tax invoice, not a receipt, but it prints a ZATCA QR too. Scored the same
-way (`scripts/eval_set.py score --mode auto --qr off|on`, 2026-09-30): QR off
-**7/9**, the same two totals-block misses as before; QR on **9/9** — the QR
-was read (the scorer reports "read on 1 of 1 document", a count and nothing
-else), and its total and VAT, with the subtotal computed from them, replace
-both misses. Run twice, identical both times. Still n = 1.
-
 ### Public receipts: 100 from CORU
 
 The only measurement here on documents this project did not write or choose
@@ -265,7 +167,7 @@ Receipt-QA answers, each photo wrapped as a scanned page with no text layer
 and run through the pipeline's own steps. Local Ollama, 2026-10-05; every run,
 its configuration and its commit are in [`docs/results.md`](docs/results.md).
 
-| Field (receipts with ground truth) | Baseline: OCR text path<br/>`qwen2.5:7b-instruct` | Best: vision path<br/>`qwen3.5:4b` |
+| Field (receipts with ground truth) | Baseline: OCR text path<br/>`qwen2.5:7b-instruct` | Best: vision path<br/>`qwen3.5:4b`, original prompt (v1) |
 | --- | :---: | :---: |
 | Store name, exact (100) | 5% | **62%** |
 | Store name, fuzzy (100) | 22% | **80%** |
@@ -386,6 +288,109 @@ entry 9 of the [engineering log](docs/engineering-log.md).
   receipts carry no signed XML and no ZATCA QR, and their VAT numbers fail the
   Saudi format rule by design (34 of vision's 77 false alarms). They are a
   public, checkable stand-in for the hard case: a photographed page.
+
+### Reading the ZATCA QR: off vs on
+
+A simplified (B2C) receipt carries no XML, but must print the ZATCA QR. Decoding
+it (OpenCV, no model) gives the seller name, VAT number, date, total and VAT
+exactly; the subtotal then follows as total − VAT. Measured 2026-09-30 with
+`scripts/benchmark.py --qr off|on` on the eight **synthetic** test invoices
+(`scripts/make_test_invoices.py`; two are receipts with a QR, 07 English and 08
+Arabic), local Ollama, eleven header fields per invoice. The model reads every
+invoice, signed XML ignored, so the six non-receipts are the same with QR on or
+off and only the receipts can move.
+
+| Field | Text `qwen2.5:7b-instruct`<br/>QR off → on | Vision `qwen3.5:4b`<br/>QR off → on |
+| --- | :---: | :---: |
+| Invoice number | 8/8 → 8/8 | 8/8 → 8/8 |
+| Issue date | 8/8 → 8/8 | 8/8 → 8/8 |
+| Seller name | 8/8 → 8/8 | 5/8 → **6/8** |
+| Seller VAT number | 8/8 → 8/8 | 8/8 → 8/8 |
+| Buyer name | 8/8 → 8/8 | 5/8 → 5/8 |
+| Buyer VAT number | 8/8 → 8/8 | 8/8 → 8/8 |
+| Subtotal | 6/8 → **8/8** | 5/8 → **7/8** |
+| VAT amount | 8/8 → 8/8 | 8/8 → 8/8 |
+| Total | 8/8 → 8/8 | 5/8 → **7/8** |
+| Currency | 8/8 → 8/8 | 8/8 → 8/8 |
+| PO number | 8/8 → 8/8 | 8/8 → 8/8 |
+| **All fields** | **86/88 (98%) → 88/88 (100%)** | **76/88 (86%) → 81/88 (92%)** |
+| The two receipts alone | 20/22 → 22/22 | 16/22 → 21/22 |
+
+The receipt-only row was re-run separately and moves by exactly as much as the
+full run, so the difference is the QR's and not run-to-run noise.
+
+* **Text path:** the model already reads the QR's five fields correctly off
+  these clean synthetic pages. What it cannot read is a subtotal that is not
+  printed: it returns null on both receipts. The QR's total and VAT fill it.
+* **Vision path:** the model misread both receipts' totals, one seller name,
+  and so both subtotals; the QR corrects all five. What is left on the receipts
+  is a buyer name invented for a receipt that has no buyer — the QR carries no
+  buyer, so it cannot help there.
+* **These are synthetic pages** with crisp, generated QR codes. A printed and
+  re-scanned QR is harder to decode, and none has been measured here. When the
+  QR cannot be read the pipeline simply falls back to the model's reading.
+
+**And on the real invoice.** The contractor invoice in the table below is a
+B2B tax invoice, not a receipt, but it prints a ZATCA QR too. Scored the same
+way (`scripts/eval_set.py score --mode auto --qr off|on`, 2026-09-30): QR off
+**7/9**, the same two totals-block misses as in that table; QR on **9/9** — the QR
+was read (the scorer reports "read on 1 of 1 document", a count and nothing
+else), and its total and VAT, with the subtotal computed from them, replace
+both misses. Run twice, identical both times. Still n = 1.
+
+### One real invoice (n = 1)
+
+One real invoice, scored against hand-entered ground truth: a two-page Arabic
+B2B tax invoice from a Saudi contractor, no embedded XML, a clean text layer on
+page 1 and a blank filler page 2. The invoice and its ground truth were
+personal data, never committed, and have since been deleted; only the scores
+remain, as dated records that can no longer be re-run.
+
+Measured 2026-09-24 with `scripts/eval_set.py score`, nine header fields, the
+full schema-conditioned prompt with field guidelines. Temperature 0, seed 0 and
+`think: false` on every call. The vision run was repeated three times and
+scored identically each time; that is repeatable here, not guaranteed, since
+Ollama's prompt cache has been seen to change a value between a cold and a warm
+run (recorded in `CLAUDE.md`).
+
+| Field | Text path<br/>`qwen2.5:7b-instruct` | Vision path<br/>`qwen3.5:4b`, every page as an image | Auto (the default)<br/>page 1 as text, page 2 as an image |
+| --- | :---: | :---: | :---: |
+| Invoice number | ✓ | ✓ | ✓ |
+| Issue date | ✓ | ✓ | ✓ |
+| Seller name | ✓ | ✗ | ✓ |
+| Seller VAT number | ✓ | ✗ swapped with the buyer's | ✓ |
+| Buyer name | ✓ | ✗ | ✓ |
+| Buyer VAT number | ✓ | ✗ swapped with the seller's | ✓ |
+| Subtotal | ✗ returned null, now flagged for review | ✓ | ✗ |
+| VAT amount | ✓ | ✓ | ✓ |
+| Total | ✓ | ✓ | ✗ |
+| **Correct** | **8 / 9** | **5 / 9** | **7 / 9** |
+
+What this does and does not show:
+
+* **n = 1.** One invoice is an anecdote, not an accuracy figure. It is here
+  because it is real, not because it generalises.
+* **On a clean text layer, the text path wins.** That is the case it is built
+  for. Vision exists for pages with no usable text, and this invoice has none
+  of those that carry data, so it cannot show vision earning its place.
+* **Vision got the whole totals block right and the parties wrong.** Both names
+  missed, well away from the ground truth (under 50% similarity), not a dropped
+  word; the two VAT numbers came back swapped with each other, checked directly
+  rather than inferred from the scores. The invoice prints two similar
+  registration blocks, and nothing in the prompt anchors which one is the
+  seller's letterhead.
+* **Auto cost a field here, because of the blank page.** Page 2 has no text, so
+  routing sends it as an image, which moves the *whole* call to the vision
+  model. A page with nothing on it should not need vision; see
+  [Known limitations](#known-limitations).
+
+**How the vision model was chosen.** By hand, before the pipeline was wired,
+with the same bare prompt and no field list on this same invoice:
+`qwen2.5vl:3b` scored 7/9; `qwen3.5:4b` at Ollama's own defaults scored 3/9 and
+invented computed values; `qwen3.5:4b` with temperature 0, a fixed seed and
+thinking off scored 8/9. Ollama defaults that model to temperature 1, and its
+OpenAI-compatible endpoint silently ignores `think`, which is why the client
+now calls Ollama's native API and pins all three on every request.
 
 ## The dashboard
 
