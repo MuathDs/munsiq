@@ -7,7 +7,7 @@
 - **Image input vs OCR text: 41% → 78%** on those same receipts.
 - **ZATCA XML and QR are read deterministically**, before any model; reading
   the QR took a real invoice from 7/9 to 9/9 fields.
-- **19 validation rules, 610 automated tests**, and tenant isolation enforced
+- **19 validation rules, 633 automated tests**, and tenant isolation enforced
   by Postgres row-level security.
 - **Fully local inference**, no cloud AI API.
 
@@ -127,7 +127,7 @@ Real numbers from this machine. Nothing here is estimated.
 
 | What | Measurement | How |
 | --- | --- | --- |
-| Backend test suite | **610 passed, 1 skipped, 1 xfailed — 27m59s** | full `pytest` run against Supabase Postgres 17.6, 2026-10-06. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
+| Backend test suite | **633 passed, 1 skipped, 1 xfailed — 26m56s** | full `pytest` run against Supabase Postgres 17.6, 2026-10-07. The skip and the xfail are one gap seen twice: there is no real ZATCA sample yet (see `samples/README.md`), and the suite says so instead of hiding it |
 | Validation rules | **19** (10 blocking errors, 9 warnings) | counted from the rule registry (`engine._REGISTRY`), 2026-09-30 |
 | Validation coverage | **100% statements and branches** — 601 statements, 204 branches, 0 missed | `pytest-cov --cov-branch` over `app/services/validation`, 2026-09-30; 165 tests, **6.3 s** without coverage instrumentation — 1.8 s for the rules alone (pure functions), the rest is `test_qr.py` rasterizing and decoding synthetic QR pages |
 | Export renderers | **18 tests, 1.5s**, no database | `tests/test_export_render.py` |
@@ -136,6 +136,11 @@ Real numbers from this machine. Nothing here is estimated.
 | Document B, model path | `qwen2.5:7b-instruct` via Ollama; **11/11 fields grounded**; confidences 0.857–1.000; 1 blocker (`GRAND_TOTAL_MISMATCH`); model call **164.9 s** | queried from the database (`annotations.latency_ms` = 164,875), 2026-09-20 |
 | Seed wall clock | A: 29.8 s, B: 181.0 s (pipeline, end to end) | printed by `scripts/seed_demo_documents.py` on 2026-09-19. **Not re-measured**, and which hardware the model ran on was not recorded |
 | Live upload, through the UI | compact 7 KB compliant PDF: dropped → *Ready for review* in ≈33 s; an unreadable PDF → *Processing failed: … not a readable PDF* in ≈27 s | driven in the browser on 2026-09-20; sampled every 3 s, so ±3 s |
+
+The Document A, Document B and seed rows are dated records of the demo
+documents as they were then. The demo organization was re-seeded with synthetic
+invoices on 2026-10-06, and document B is now read by `qwen3.5:4b`, as the
+screenshots show.
 
 The ungrounded values on document A are honest gaps, not failures. The seller's
 legal name is Arabic in the XML while the page prints the English trading name;
@@ -149,8 +154,9 @@ keeps its authority either way: the XML is what was signed, not the page.
 
 One real invoice, scored against hand-entered ground truth: a two-page Arabic
 B2B tax invoice from a Saudi contractor, no embedded XML, a clean text layer on
-page 1 and a blank filler page 2. The invoice and its ground truth are
-git-ignored personal data; only the scores are here.
+page 1 and a blank filler page 2. The invoice and its ground truth were
+personal data, never committed, and have since been deleted; only the scores
+remain, as dated records that can no longer be re-run.
 
 Measured 2026-09-24 with `scripts/eval_set.py score`, nine header fields, the
 full schema-conditioned prompt with field guidelines. Temperature 0, seed 0 and
@@ -275,7 +281,10 @@ its configuration and its commit are in [`docs/results.md`](docs/results.md).
 | Seconds per receipt | 29.2 | 17.2 |
 
 Exact match is after normalization: amounts as Decimals, dates as dates, names
-with case and punctuation folded.
+with case and punctuation folded. This table was measured with the original
+prompt (405 of 517 for the vision path). Under the calibrated prompt that is now
+the default the same model scores 403 of 517 — still 78% — as shown further
+down.
 
 * **The baseline is the OCR text path with no Arabic OCR on this machine.** It
   is there to show why a page with no text layer is routed to vision, which is
@@ -337,28 +346,41 @@ back from the saved runs, not assumed). Most of what is left is not something
 more parameters fix at this resolution. 81 fields are wrong in *both* models,
 and on 39 of them the two returned the identical wrong value. Sorted by cause,
 about a third of the errors are misread characters, mostly long receipt numbers
-too small to read at 100 DPI, and about a quarter are the label following a
-different convention than the page — the shop named without its branch,
+too small to read at 100 DPI, and a quarter to a third are the label following
+a different convention than the page — the shop named without its branch,
 another of the receipt's printed numbers, a decimal comma. The near-equal total
 also hides a trade: the 9B is 16 fields better on store names and 15 worse on
-receipt numbers. This does not show that size never matters; it shows where
-these two sizes land on these receipts. On the development sample, doubling the
-resolution helped the 4B model by 2.3 points (207 → 213 of 263); the 9B at that
-resolution was not run.
+receipt numbers, 12 of which it returned empty. This does not show that size
+never matters; it shows where these two sizes land on these receipts. On the
+development sample, doubling the resolution took the 4B model from 78.7% to
+81.0% (207 → 213 of 263 fields, at 200 DPI with an 8,192-token context, which
+does fit on the 4 GB laptop); the 9B at that resolution was not run.
 
-| Test sample, 517 fields | 4B, laptop | 9B, Colab |
-| --- | :---: | :---: |
-| Correct | 403 (77.9%) | 410 (79.3%) |
-| Store name · receipt number | 58% · 62% | 74% · 44% |
-| Date · total · subtotal | 96% · 91% · 90% | 96% · 93% · 94% |
-| Wrong in both · only this model | 81 · 33 | 81 · 26 |
-| Errors: misread · label style · wrong field · empty · unclassified | 33 · 34 · 12 · 14 · 21 | 38 · 27 · 6 · 24 · 12 |
+| Test sample, calibrated prompt | Scored | 4B, laptop | 9B, Colab | 9B − 4B | Wrong in both | Only 4B wrong | Only 9B wrong |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Store name | 100 | 58 (58%) | 74 (74%) | +16 | 24 | 18 | 2 |
+| Date | 100 | 96 (96%) | 96 (96%) | 0 | 4 | 0 | 0 |
+| Receipt number | 82 | 51 (62%) | 36 (44%) | −15 | 28 | 3 | 18 |
+| Subtotal | 52 | 47 (90%) | 49 (94%) | +2 | 3 | 2 | 0 |
+| VAT amount | 33 | 25 (76%) | 27 (82%) | +2 | 6 | 2 | 0 |
+| Total | 100 | 91 (91%) | 93 (93%) | +2 | 4 | 5 | 3 |
+| VAT number | 50 | 35 (70%) | 35 (70%) | 0 | 12 | 3 | 3 |
+| **All fields** | **517** | **403 (77.9%)** | **410 (79.3%)** | **+7** | **81** | **33** | **26** |
+
+| Why the wrong fields were wrong | 4B (114) | 9B (107) |
+| --- | ---: | ---: |
+| Misread characters or digits | 33 | 38 |
+| Label-style mismatch | 34 | 27 |
+| Wrong field picked | 12 | 6 |
+| Empty | 14 | 24 |
+| Unclassified | 21 | 12 |
+
+Line items are not in this table: CORU's QA split has no ground truth for them.
 
 The original prompt stays selectable (`EXTRACTION_PROMPT_VERSION=1`), so every
 number above can be reproduced under the prompt it was measured with. Full
 per-field table: [`docs/results.md`](docs/results.md). The investigation is
 entry 9 of the [engineering log](docs/engineering-log.md).
-
 
 * **These are not the documents the product is for.** Egyptian and Gulf retail
   receipts carry no signed XML and no ZATCA QR, and their VAT numbers fail the
@@ -652,17 +674,31 @@ How Munsiq differs:
 
 ## Future work
 
+None of these has been run or built.
+
+* **The 9B model at 200 DPI.** Not run. On the development sample the 4B model
+  gained 2.3 points from 100 to 200 DPI (78.7% → 81.0%). Whether the larger
+  model pulls ahead with more pixels is the open half of the size question; the
+  rule set in advance was to score the test sample again only if the 9B gained
+  five points on the development sample and beat the 4B by five.
+* **A third model family, such as Gemma 4.** Not run. Both models measured here
+  are Qwen 3.5, so "size barely mattered" is a statement about one family. 39
+  of the 81 fields wrong in both came back with the identical wrong value,
+  which is what shared training would look like.
+* **The 9B model returning empty receipt numbers.** It left 12 of 82 receipt
+  numbers empty where the 4B left 1, and scored 44% against 62% on that field.
+  Not investigated: a receipt prints several numbers, and why the larger model
+  more often returns none of them is not known.
 * **Sanity-check QR values.** Refuse a QR date that cannot be an invoice date
   (one real receipt's decoded as `0001-01-01`) and keep the model's reading.
-* **Catch plausible wrong values.** With the calibrated prompt neither model
-  returns empty receipts, so what is left is the harder error: a store name or
-  receipt number that is wrong and looks settled (22 and 15 of 517 fields).
-  A third of the errors are misread characters, so resolution is the first
-  thing to measure: on the development sample 200 DPI gave the 4B model 2.3
-  points, and the 9B at 200 DPI is still to run. A second-pass check on long
-  digit strings is the other.
+* **Catch plausible wrong values.** Wrong fields that look settled are the
+  harder error: 22 and 15 of 517, all store names and receipt numbers. A
+  second-pass check on long digit strings is the obvious first measurement.
+* **Read a decimal comma in the scorer.** Four amounts per model are marked
+  wrong only because the label says `24,44`. Fixing it moves every published
+  number slightly, so it has to be done once, for all runs, and said.
 * **Fine-tune on CORU.** Its training splits are public and MIT-licensed; the
-  100-receipt sample used here stays held out.
+  100-receipt test sample and the 50-receipt development sample stay held out.
 
 ## Layout
 
@@ -673,7 +709,7 @@ docs/        db.md · ingestion.md · validation.md · demo.md · adr/ · screen
              results.md (every measured run) · engineering-log.md
              design-handoff/ (the original dashboard design) · legacy/
 samples/     git-ignored — nothing in it is committed; test/ is generated;
-             eval/ holds ground truth and the public CORU sample
+             eval/ holds the public CORU test and development samples
 legacy/      the pre-Munsiq prototype: pandas → Excel reporter, fine-tune notebook
              (not maintained; see legacy/README.md)
 ```
